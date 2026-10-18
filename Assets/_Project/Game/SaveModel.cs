@@ -17,7 +17,10 @@ namespace Mahjong.Game
         public int tileSize = 0;          // 0 fit to screen, 1 large, 2 extra large
         public bool leftHanded;
         public bool reducedMotion;
-        public int textScale;             // 0 = 100%, 1 = 125%, 2 = 150%
+        public int tilt = 20;             // board tilt in degrees: 0 looks straight down, up to BoardView.MaxTilt
+        public int roll;                  // sideways tilt, -BoardView.MaxRoll..MaxRoll; positive pushes the right edge away
+        public bool autoZoom = true;      // slowly zoom in as the remaining tiles take up less of the board
+        public int textScale;            // 0 = 100%, 1 = 125%, 2 = 150%
         public int dimBlocked = 1;        // 0 off, 1 subtle, 2 strong
         public bool showBlockers = true;
         public bool matchAssist;

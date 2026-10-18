@@ -13,6 +13,7 @@ namespace Mahjong.Game
     /// </summary>
     public sealed class AutoTest : MonoBehaviour
     {
+        const float AutoZoomCapForTest = 2.5f;      // mirrors BoardView's cap on how far auto zoom may close in
         App app;
         string shots;
         int errors;
@@ -104,6 +105,117 @@ namespace Mahjong.Game
             yield return new WaitForSeconds(0.8f);
             yield return Shot("31_shuffled");
             Check(gs.Session.Board.HasMove(), "shuffle leaves a move");
+
+            // --- 3D picking at several tilts: aiming at a tile's face on screen must pick that tile. At steep angles a taller
+            //     stack can genuinely stand in front of it, so a different tile only counts as right when it is on a higher layer.
+            {
+                var lay = gs.Session.Level.Layout;
+                var angles = new[] { new Vector2(0, 0), new Vector2(25, 0), new Vector2(45, 0), new Vector2(60, 0), new Vector2(30, 25), new Vector2(40, -40) };
+                foreach (var ang in angles)
+                {
+                    int tilt = (int)ang.x;
+                    app.S.tilt = tilt; app.S.roll = (int)ang.y;
+                    app.ApplySettings();                            // as the Settings screen does after any change
+                    Check(Mathf.Abs(app.Board.TargetTilt - tilt) < 0.01f && Mathf.Abs(app.Board.TargetRoll - ang.y) < 0.01f,
+                          "board follows the tilt and roll settings (" + tilt + ", " + ang.y + ")");
+                    yield return new WaitForSeconds(1.0f);          // the board eases to the new tilt
+                    int tested = 0, wrong = 0;
+                    for (int i = 0; i < lay.Count; i++)
+                    {
+                        if (!app.Board.IsVisible(i)) continue;
+                        bool covered = false;
+                        foreach (int up in lay.Above[i]) if (app.Board.IsVisible(up)) covered = true;
+                        if (covered) continue;
+                        tested++;
+                        int hit = app.Board.HitTest(app.Cam.ScreenPointToRay(app.Board.TileScreenPos(i)));
+                        if (hit != i && !(hit >= 0 && lay.Pos[hit].Z > lay.Pos[i].Z)) wrong++;
+                    }
+                    Check(tested > 0 && wrong == 0, "ray picking at tilt " + tilt + " roll " + ang.y + " (" + tested + " tiles, " + wrong + " wrong)");
+                    yield return Shot("33_tilt_" + tilt + "_roll_" + (int)ang.y);
+                }
+
+                // dragging the background goes through TiltBy: up lays the top back, right pushes the right edge away, limits hold
+                app.S.tilt = 20; app.S.roll = 0;
+                app.Board.TiltBy(10f, -15f);
+                Check(app.S.tilt == 30 && app.S.roll == -15, "drag tilts on both axes (" + app.S.tilt + ", " + app.S.roll + ")");
+                app.Board.TiltBy(500f, 500f);
+                Check(app.S.tilt == BoardView.MaxTilt && app.S.roll == BoardView.MaxRoll, "tilt and roll stop at their limits");
+                app.Board.TiltBy(-500f, -500f);
+                Check(app.S.tilt == 0 && app.S.roll == -BoardView.MaxRoll, "tilt and roll stop at their lower limits");
+                app.S.tilt = 20; app.S.roll = 0;
+                app.ApplySettings();
+                yield return new WaitForSeconds(0.8f);
+            }
+
+            // --- auto zoom: as tiles come off, the view closes in on the ones that are left (slowly), and picking still works
+            {
+                app.S.autoZoom = true; app.ApplySettings();
+                app.StartJourney(150, false);
+                yield return WaitGame(150);
+                yield return new WaitForSeconds(1.5f);
+                var gz = app.Get<GameScreen>();
+                float before = app.Board.ViewScale;
+                var solz = gz.Session.Level.Solution;
+                int upTo = solz.Length / 2 - 2;                       // take off all but the last two pairs
+                // how much smaller the remaining footprint is than the whole board (in half-cell positions, tiles are 2 wide)
+                var lzo = gz.Session.Level.Layout;
+                int fx0 = int.MaxValue, fx1 = int.MinValue, fy0 = int.MaxValue, fy1 = int.MinValue;
+                int rx0 = int.MaxValue, rx1 = int.MinValue, ry0 = int.MaxValue, ry1 = int.MinValue;
+                for (int i = 0; i < lzo.Count; i++)
+                {
+                    var q = lzo.Pos[i];
+                    fx0 = Mathf.Min(fx0, q.X); fx1 = Mathf.Max(fx1, q.X); fy0 = Mathf.Min(fy0, q.Y); fy1 = Mathf.Max(fy1, q.Y);
+                }
+                for (int k = 2 * upTo; k < solz.Length; k++)
+                {
+                    var q = lzo.Pos[solz[k]];
+                    rx0 = Mathf.Min(rx0, q.X); rx1 = Mathf.Max(rx1, q.X); ry0 = Mathf.Min(ry0, q.Y); ry1 = Mathf.Max(ry1, q.Y);
+                }
+                float shrink = Mathf.Max((rx1 - rx0 + 2f) / (fx1 - fx0 + 2f), (ry1 - ry0 + 2f) / (fy1 - fy0 + 2f));   // 1 = no smaller
+                for (int i = 0; i < upTo; i++)
+                {
+                    app.Board.TapTile(solz[2 * i]); app.Board.TapTile(solz[2 * i + 1]);
+                    yield return new WaitForSeconds(0.03f);
+                }
+                yield return new WaitForSeconds(0.5f);
+                float early = app.Board.ViewScale;
+                yield return new WaitForSeconds(5f);
+                float after = app.Board.ViewScale;
+                // the remaining tiles fit in 'shrink' of the board, so the view should close in by a good part of 1/shrink
+                // (less when capped, or when the tilt makes the board's depth the limiting size)
+                float want = 1f + 0.4f * (Mathf.Min(1f / shrink, AutoZoomCapForTest) - 1f);
+                Check(shrink > 0.8f || after > before * want,
+                      "auto zoom closes in as tiles come off (" + before.ToString("F1") + " -> " + after.ToString("F1") + " px/unit, remaining footprint " + shrink.ToString("P0") + " of the board)");
+                Check(shrink > 0.8f || early < after * 0.999f, "auto zoom is gradual (" + early.ToString("F1") + " half a second in, " + after.ToString("F1") + " settled)");
+                int tz = 0, wz = 0;
+                var lz = gz.Session.Level.Layout;
+                for (int i = 0; i < lz.Count; i++)
+                {
+                    if (!app.Board.IsVisible(i)) continue;
+                    bool covered = false;
+                    foreach (int up in lz.Above[i]) if (app.Board.IsVisible(up)) covered = true;
+                    if (covered) continue;
+                    tz++;
+                    int hit = app.Board.HitTest(app.Cam.ScreenPointToRay(app.Board.TileScreenPos(i)));
+                    if (hit != i && !(hit >= 0 && lz.Pos[hit].Z > lz.Pos[i].Z)) wz++;
+                }
+                Check(tz > 0 && wz == 0, "ray picking after auto zoom (" + tz + " tiles, " + wz + " wrong)");
+                yield return Shot("34_autozoom");
+                // undo takes tiles back, so the view eases back out
+                for (int i = 0; i < upTo; i++) app.Board.DoUndo();
+                yield return new WaitForSeconds(5f);
+                Check(shrink > 0.8f || app.Board.ViewScale < after * 0.97f,"view eases back out after undo (" + after.ToString("F1") + " -> " + app.Board.ViewScale.ToString("F1") + ")");
+                app.S.autoZoom = false; app.ApplySettings();
+                yield return new WaitForSeconds(4f);
+                Check(Mathf.Abs(app.Board.AutoZoomFactor - 1f) < 0.02f, "auto zoom off frames the whole board");
+                app.S.autoZoom = true; app.ApplySettings();
+                app.Show("home");
+                yield return new WaitForSeconds(0.3f);
+                app.StartJourney(30, false);        // the stuck-panel check below expects the level 30 board
+                yield return WaitGame(30);
+                yield return new WaitForSeconds(1.2f);
+                gs = app.Get<GameScreen>();
+            }
 
             // --- stuck panel: tap a blocked tile for the nudge, then force a stuck check
             var board = gs.Session.Board;

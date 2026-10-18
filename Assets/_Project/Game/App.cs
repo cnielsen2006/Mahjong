@@ -48,6 +48,8 @@ namespace Mahjong.Game
         public BoardView Board;
         public Camera Cam;
         public Canvas Canvas;
+        public Camera BgCam { get; private set; }
+        const int BgLayer = 31;                 // a layer nothing else uses, seen only by the background camera
         public CanvasScaler Scaler;
         public RectTransform SafeRoot;
         public bool Portrait { get; private set; }
@@ -80,7 +82,7 @@ namespace Mahjong.Game
         readonly Queue<string> toastQueue = new Queue<string>();
 
         int lastW, lastH;
-        float saveTimer;
+        float saveAt = -1f;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void Boot()
@@ -98,6 +100,7 @@ namespace Mahjong.Game
             Instance = this;
             Application.targetFrameRate = 60;
             QualitySettings.vSyncCount = 1;
+            QualitySettings.antiAliasing = 4;     // tile edges are real geometry now
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
             Input.simulateMouseWithTouches = true;
             UiKit.Init();
@@ -141,11 +144,28 @@ namespace Mahjong.Game
                 Cam = go.AddComponent<Camera>();
                 go.AddComponent<AudioListener>();
             }
-            Cam.orthographic = true;
-            Cam.clearFlags = CameraClearFlags.SolidColor;
-            Cam.backgroundColor = new Color(0.08f, 0.12f, 0.12f);
-            Cam.transform.position = new Vector3(0, 0, -10);
-            Cam.nearClipPlane = 0.1f; Cam.farClipPlane = 50f;
+            // The board is real 3D now. BoardView owns the projection (a perspective frustum that is shifted so the
+            // board centres in its part of the screen) and the camera distance; it only ever looks straight down +z.
+            Cam.orthographic = false;
+            Cam.fieldOfView = BoardView.Fov;
+            Cam.transform.SetPositionAndRotation(new Vector3(0, 0, -20), Quaternion.identity);
+            Cam.nearClipPlane = 0.3f; Cam.farClipPlane = 250f;
+            Cam.allowMSAA = true; Cam.allowHDR = false;
+
+            // The background picture is drawn by its own camera, because the board camera's off-centre frustum would
+            // shift a camera-space canvas. The board camera only clears depth and draws over it.
+            Cam.cullingMask &= ~(1 << BgLayer);
+            Cam.clearFlags = CameraClearFlags.Depth;
+            Cam.depth = 0f;
+            var bgGo = new GameObject("Background Camera");
+            bgGo.transform.SetParent(transform, false);
+            BgCam = bgGo.AddComponent<Camera>();
+            BgCam.orthographic = true;
+            BgCam.cullingMask = 1 << BgLayer;
+            BgCam.clearFlags = CameraClearFlags.SolidColor;
+            BgCam.backgroundColor = new Color(0.08f, 0.12f, 0.12f);
+            BgCam.depth = -10f;
+            BgCam.allowMSAA = false; BgCam.allowHDR = false;
         }
 
         void SetupCanvas()
@@ -166,16 +186,17 @@ namespace Mahjong.Game
                 es.transform.SetParent(transform, false);
             }
 
-            // The background must sit BEHIND the board sprites, and overlay canvases always draw on top of the camera.
-            // So it gets its own camera-space canvas pushed far behind the tiles.
+            // The background must sit BEHIND the board, and overlay canvases always draw on top of the camera.
+            // So it gets its own canvas, rendered by the background camera before the board camera draws.
             var bgc = new GameObject("BackgroundCanvas", typeof(RectTransform));
+            bgc.layer = BgLayer;
             bgc.transform.SetParent(transform, false);
             var bcv = bgc.AddComponent<Canvas>();
             bcv.renderMode = RenderMode.ScreenSpaceCamera;
-            bcv.worldCamera = Cam;
-            bcv.planeDistance = 30f;
-            bcv.sortingOrder = -10;
+            bcv.worldCamera = BgCam;
+            bcv.planeDistance = 10f;
             var bg = UiKit.NewRect("Background", bgc.transform);
+            bg.gameObject.layer = BgLayer;
             UiKit.Stretch(bg);
             bgImage = bg.gameObject.AddComponent<RawImage>();
             bgImage.raycastTarget = false;
@@ -289,7 +310,6 @@ namespace Mahjong.Game
         public void ApplySettings()
         {
             Board.Settings = S;
-            Board.Refit();
             Audio.SoundVolume = S.sound; Audio.MusicVolume = S.music;
             UpdateLayoutMetrics(true);
             ApplyBackground();
@@ -435,8 +455,11 @@ namespace Mahjong.Game
             if (Input.GetKeyDown(KeyCode.F11) || (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Return)))
                 Screen.fullScreen = !Screen.fullScreen;
 
-            saveTimer += Time.unscaledDeltaTime;
+            if (saveAt > 0f && Time.unscaledTime >= saveAt) { saveAt = -1f; Save.Save(); }
         }
+
+        /// <summary>Saves a moment from now. For settings that change continuously (sliders), so the file is written once, not per step.</summary>
+        public void SaveSoon() { saveAt = Time.unscaledTime + 1f; }
 
         void UpdateToast()
         {

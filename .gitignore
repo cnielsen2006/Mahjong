@@ -25,3 +25,13 @@ tools/CoreTests/obj/
 *.aab
 *.keystore
 *.jks
+
+# Secrets / service config
+.env
+.env.*
+google-services.json
+GoogleService-Info.plist
+*.keystore.*
+*.pfx
+*.p12
+*.pem

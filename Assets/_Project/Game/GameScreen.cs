@@ -18,6 +18,8 @@ namespace Mahjong.Game
         Button menuBtn, hintBtn, undoBtn, shuffleBtn;
         readonly Button[] ctl = new Button[3];
         GameObject pausePanel, winPanel, confirmPanel;
+        Slider tiltSlider;
+        Text tiltVal;
         RectTransform winCard;
 
         LevelRequest req;
@@ -154,7 +156,7 @@ namespace Mahjong.Game
         void BuildPause()
         {
             RectTransform card;
-            pausePanel = Modal("PausePanel", out card, 560, 620);
+            pausePanel = Modal("PausePanel", out card, 560, 740);
             var title = UiKit.Label(card, "Paused", 60, UiKit.Ink, TextAnchor.MiddleCenter, FontStyle.Bold);
             UiKit.Anchor(title.rectTransform, 0, 0.8f, 1, 1, 0, 0, 0, -20);
             var v = UiKit.VStack(card, "Buttons", 10, TextAnchor.UpperCenter);
@@ -163,6 +165,21 @@ namespace Mahjong.Game
             UiKit.Size(UiKit.Btn(v.transform, "Restart level", () => AskRestart(), UiKit.Secondary, 34), -1, 88);
             UiKit.Size(UiKit.Btn(v.transform, "Settings", () => { app.Get<SettingsScreen>().ReturnTo = "game"; FlushProgress(); app.Show("settings"); }, UiKit.Secondary, 34), -1, 88);
             UiKit.Size(UiKit.Btn(v.transform, "Home", GoHome, UiKit.Secondary, 34), -1, 88);
+
+            // board tilt, adjustable live: the board stays visible behind the dimmed panel
+            var tiltRow = UiKit.NewRect("TiltRow", v.transform);
+            UiKit.Size(tiltRow, -1, 84);
+            var tl = UiKit.Label(tiltRow, "Tilt", 34, UiKit.Ink, TextAnchor.MiddleLeft);
+            UiKit.Anchor(tl.rectTransform, 0, 0, 0.24f, 1, 6, 0, 0, 0);
+            tiltVal = UiKit.Label(tiltRow, "", 32, UiKit.Gold, TextAnchor.MiddleRight, FontStyle.Bold);
+            UiKit.Anchor(tiltVal.rectTransform, 0.8f, 0, 1, 1, 0, 0, -4, 0);
+            tiltSlider = UiKit.NewSlider(tiltRow, "Slider", 0, BoardView.MaxTilt, app.S.tilt, val =>
+            {
+                app.S.tilt = (int)val;
+                tiltVal.text = (int)val + "°";
+                app.SaveSoon();
+            });
+            UiKit.Anchor((RectTransform)tiltSlider.transform, 0.25f, 0, 0.8f, 1, 0, 0, -6, 0);
             pausePanel.SetActive(false);
         }
 
@@ -356,6 +373,8 @@ namespace Mahjong.Game
             if (won) return;
             pausePanel.SetActive(true); paused = true;
             stuckCard.gameObject.SetActive(false);
+            tiltSlider.SetValueWithoutNotify(app.S.tilt);      // the shortcut keys may have moved it
+            tiltVal.text = app.S.tilt + "°";
         }
 
         void ClosePause() { pausePanel.SetActive(false); paused = false; if (Session.IsStuck) stuckCard.gameObject.SetActive(true); }

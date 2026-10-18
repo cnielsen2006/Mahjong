@@ -94,7 +94,6 @@ namespace Mahjong.Game
         const int Cols = 6, Rows = 7;   // 42 cells
         public Texture2D Texture;
         public Sprite[] Faces = new Sprite[Kinds.Count];
-        public Sprite Outline;
         public readonly TileStyle Style;
 
         /// <summary>Draws the whole atlas. Pure pixel work, safe to call from a worker thread.</summary>
@@ -115,21 +114,35 @@ namespace Mahjong.Game
         {
             Style = style;
             int cw = TileW + Gutter * 2, ch = TileH + Gutter * 2;
-            Texture = drawn.ToTexture(true, FilterMode.Bilinear);
+            // the 3D board views the faces at an angle, so filter across mip levels and along the slant
+            Texture = drawn.ToTexture(true, FilterMode.Trilinear);
             Texture.name = "Atlas_" + style.Id;
+            Texture.anisoLevel = 4;
             for (int k = 0; k < Kinds.Count; k++)
             {
                 var rect = new Rect((k % Cols) * cw + Gutter, (k / Cols) * ch + Gutter, TileW, TileH);
                 Faces[k] = Sprite.Create(Texture, rect, new Vector2(0.5f, 0.5f), Ppu, 0, SpriteMeshType.FullRect);
             }
-            Outline = TileArt.OutlineSprite();
+        }
+
+        /// <summary>
+        /// Where a kind's face art sits in the atlas, as (u, v, width, height). This is the rim-and-face rectangle of the
+        /// drawn tile, pulled in by a pixel so the anti-aliased outer edge is never sampled.
+        /// </summary>
+        public Vector4 FaceUv(int kind)
+        {
+            int cw = TileW + Gutter * 2, ch = TileH + Gutter * 2;
+            float ox = (kind % Cols) * cw + Gutter, oy = (kind / Cols) * ch + Gutter;
+            float x0 = ox + TileMesh.FaceX0 + 1f, x1 = ox + TileMesh.FaceX1 - 1f;
+            float y0 = oy + TileMesh.FaceY0 + 1f, y1 = oy + TileMesh.FaceY1 - 1f;
+            float tw = Texture.width, th = Texture.height;
+            return new Vector4(x0 / tw, y0 / th, (x1 - x0) / tw, (y1 - y0) / th);
         }
 
         public void Destroy()
         {
             if (Texture != null) UnityEngine.Object.Destroy(Texture);
             for (int i = 0; i < Faces.Length; i++) if (Faces[i] != null) UnityEngine.Object.Destroy(Faces[i]);
-            if (Outline != null) { UnityEngine.Object.Destroy(Outline.texture); UnityEngine.Object.Destroy(Outline); }
         }
     }
 
@@ -329,14 +342,6 @@ namespace Mahjong.Game
                 r.RoundRectOutline(cx - 46, cy - 62, cx + 46, cy + 62, 10, 9 * st, s.Blue);
                 r.RoundRectOutline(cx - 32, cy - 48, cx + 32, cy + 48, 6, 5 * st, s.Blue);
             }
-        }
-
-        public static Sprite OutlineSprite()
-        {
-            var r = new Raster(TileAtlas.TileW, TileAtlas.TileH);
-            r.RoundRectOutline(11, 13, TileAtlas.TileW - 3, TileAtlas.TileH - 3, 19, 8, new Color32(255, 255, 255, 255));
-            var t = r.ToTexture(false, FilterMode.Bilinear);
-            return Sprite.Create(t, new Rect(0, 0, t.width, t.height), new Vector2(0.5f, 0.5f), TileAtlas.Ppu, 0, SpriteMeshType.FullRect);
         }
 
         // ------------------------------------------------------------ UI sprites

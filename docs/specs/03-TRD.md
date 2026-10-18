@@ -6,7 +6,7 @@ Companion docs: `01-MRD.md`, `02-PRD.md`. Where this document and the PRD disagr
 
 Change in 1.1: no ads, no IAP, no currencies, no analytics or crash SDKs, no remote content, no accounts. Fewer packages, fewer services, fewer tickets.
 
-> **Implementation note (first playable build):** the game described here now exists in `C:\Users\Craig\Projects\Mahjong`.
+> **Implementation note (first playable build):** the game described here now exists in this repository.
 > See `docs/IMPLEMENTATION_NOTES.md` there for what was built and what differs from this document.
 > The main change is section 4.4: levels are built by finding a full legal clearing sequence with a forward backtracking
 > search and then assigning kinds, instead of reverse placement. Everything else in section 4 holds.

@@ -179,6 +179,34 @@ namespace Mahjong.Game
             return row.GetComponent<Image>();
         }
 
+        /// <summary>
+        /// A horizontal whole-number slider built from code: rounded track, filled part, round handle.
+        /// Fill the parent's rect with it; the handle is 64 units wide, which is comfortable under a thumb.
+        /// </summary>
+        public static Slider NewSlider(Transform parent, string name, int min, int max, int value, UnityAction<float> onChange)
+        {
+            var root = NewRect(name, parent);
+            var track = Round(root, "Track", new Color(1f, 1f, 1f, 0.18f), true);
+            Anchor(track.rectTransform, 0, 0.5f, 1, 0.5f, 0, -9, 0, 9);
+            var fillArea = NewRect("Fill Area", root);
+            Anchor(fillArea, 0, 0.5f, 1, 0.5f, 0, -9, 0, 9);
+            var fill = Round(fillArea, "Fill", Primary);
+            fill.rectTransform.anchorMin = Vector2.zero; fill.rectTransform.anchorMax = new Vector2(0.5f, 1f);
+            fill.rectTransform.offsetMin = Vector2.zero; fill.rectTransform.offsetMax = Vector2.zero;
+            var handleArea = NewRect("Handle Slide Area", root);
+            Anchor(handleArea, 0, 0.5f, 1, 0.5f, 32, -32, -32, 32);
+            var handle = Img(handleArea, "Handle", Color.white, TileArt.CircleSprite(), true);
+            handle.rectTransform.anchorMin = new Vector2(0.5f, 0f); handle.rectTransform.anchorMax = new Vector2(0.5f, 1f);
+            handle.rectTransform.sizeDelta = new Vector2(64f, 0f);
+            var s = root.gameObject.AddComponent<Slider>();
+            s.fillRect = fill.rectTransform; s.handleRect = handle.rectTransform; s.targetGraphic = handle;
+            s.direction = Slider.Direction.LeftToRight;
+            s.minValue = min; s.maxValue = max; s.wholeNumbers = true;
+            s.SetValueWithoutNotify(value);
+            if (onChange != null) s.onValueChanged.AddListener(onChange);
+            return s;
+        }
+
         public static ScrollRect Scroll(Transform parent, string name, out RectTransform content, bool vertical = true)
         {
             var rt = NewRect(name, parent);

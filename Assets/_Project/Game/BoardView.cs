@@ -2,27 +2,43 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Rendering;
 using Mahjong.Core;
 
 namespace Mahjong.Game
 {
-    /// <summary>Renders a GameSession's board with sprites, handles taps, animations and the camera fit.</summary>
+    /// <summary>
+    /// Renders a GameSession's board as real 3D tiles on a slab, handles taps, animations and the camera fit.
+    /// The play surface tilts about its centre by <see cref="SettingsData.tilt"/> degrees; the camera never rotates.
+    /// </summary>
     public sealed class BoardView : MonoBehaviour
     {
-        public const float CellW = 1f, CellH = 1.3f, LayerDx = 0.0625f, LayerDy = 0.075f;
+        public const float CellW = 1f, CellH = 1.3f;
+        public const float Fov = 26f;                // vertical field of view of the board camera
+        public const int MaxTilt = 60, MaxRoll = 45;
+        const float SlabPad = 0.4f;                  // slab border around the outermost tiles
+        const float DragDegPerScreen = 100f;         // dragging the background a full screen height tilts this many degrees
+        const float AutoZoomRate = 0.7f;             // per second; the view takes a few seconds to settle on the remaining tiles
+        const float AutoZoomMax = 2.5f;              // never zoom further than this multiple of the whole-board fit
+        const float AutoZoomTileFrac = 0.22f;        // ...nor so far that one tile is wider than this share of the viewport
 
         sealed class T
         {
             public Transform tr;
-            public SpriteRenderer body, over;
+            public MeshRenderer rend;
+            public MeshFilter mf;
             public Vector3 basePos;
             public int z;
             public bool visible;
             public int shownKind = -1;
+            public int prevKind = -1;               // the face shown until a shuffle flip turns over
             public float spawnDelay, spawnT = 1f, removeT = -1f, popT = -1f, flipT = -1f, shakeT = -1f, hintT = -1f, flashT = -1f;
             public Vector3 removeTo;
             public bool selected, free, assist;
-            public bool flipSwapped;
+            // what the material was last given, so unchanged tiles cost nothing
+            public int faceSent = -1;
+            public bool fadeSent;
+            public Color tintSent = new Color(-1, -1, -1, -1), glowSent = new Color(-1, -1, -1, -1);
         }
 
         struct Puff { public Transform tr; public SpriteRenderer sr; public Vector2 vel; public float t, life; public bool live; }
@@ -41,9 +57,16 @@ namespace Mahjong.Game
         public Action OnFirstInput;
 
         T[] tiles;
-        int[] zOrder;
         TileAtlas atlas;
-        Transform root;
+        Transform pivot;                             // rotated to tilt the play surface; sits at the world origin
+        Transform root;                              // holds the tiles, offset so the board centre is at the pivot
+        Transform slabTr;
+        MeshFilter slabMf;
+        Mesh tileMesh;
+        Material matOpaque, matFade, matSlab;
+        static readonly MaterialPropertyBlock Mpb = new MaterialPropertyBlock();
+        static readonly int IdColor = Shader.PropertyToID("_Color"), IdFace = Shader.PropertyToID("_FaceRect"),
+                            IdGlow = Shader.PropertyToID("_Glow"), IdTex = Shader.PropertyToID("_MainTex");
         readonly List<Puff> puffs = new List<Puff>();
         Sprite circle;
 
@@ -57,13 +80,17 @@ namespace Mahjong.Game
         public bool InputEnabled = true;
 
         // camera state
-        Vector2 worldMin, worldMax;
+        Vector2 worldMin, worldMax;                  // footprint of the tiles in board space
+        int layers = 1;                              // height of the tallest stack, in tiles
+        // what the camera is framing: the whole board, or with auto zoom the tiles still left, eased towards slowly
+        Vector2 viewMin, viewMax;
+        float viewLayers = 1f;
         float zoom = 1f;
-        Vector2 pan;                                 // world units
-        Vector2 lastScreen;
-        Rect lastViewport;
-        float basePpu = 1f;
-        bool dragging, pressed, pressOverUi;
+        Vector2 pan;                                 // world units at the board's centre depth
+        float shownTilt, shownRoll;                  // ease towards the settings so changes swing smoothly
+        float basePpu = 1f;                          // pixels per world unit at the board's centre depth, zoom 1
+        bool dragging, pressed, pressOverUi, pressOnTile, tiltDrag;
+        float dragPitch, dragRoll;                   // unrounded tilt while dragging, so slow drags still move
         Vector2 pressPos, lastPointer;
         float lastPinch;
         public bool CanPan { get; private set; }
@@ -78,11 +105,56 @@ namespace Mahjong.Game
             }
         }
 
+        public int TargetTilt { get { return Mathf.Clamp(Settings != null ? Settings.tilt : 0, 0, MaxTilt); } }
+        public int TargetRoll { get { return Mathf.Clamp(Settings != null ? Settings.roll : 0, -MaxRoll, MaxRoll); } }
+
+        /// <summary>Zoom of the camera fit relative to the whole board (above 1 once auto zoom has closed in).</summary>
+        public float AutoZoomFactor { get; private set; }
+
+        /// <summary>The pixels-per-unit the camera currently fits at; grows as auto zoom closes in on the remaining tiles.</summary>
+        public float ViewScale { get { return basePpu; } }
+
         void Awake()
         {
+            pivot = new GameObject("Pivot").transform;
+            pivot.SetParent(transform, false);
             root = new GameObject("Tiles").transform;
-            root.SetParent(transform, false);
+            root.SetParent(pivot, false);
             circle = TileArt.CircleSprite();
+            BuildMaterials();
+
+            var slab = new GameObject("Slab");
+            slabTr = slab.transform;
+            slabTr.SetParent(root, false);
+            slabMf = slab.AddComponent<MeshFilter>();
+            var sr = slab.AddComponent<MeshRenderer>();
+            sr.sharedMaterial = matSlab;
+            NoShadows(sr);
+        }
+
+        void BuildMaterials()
+        {
+            var sh = Resources.Load<Shader>("MahjongTile");
+            if (sh == null) sh = Shader.Find("Mahjong/Tile");
+            if (sh == null) Debug.LogError("Mahjong/Tile shader missing; the board will not draw.");
+            matOpaque = new Material(sh) { name = "TileOpaque", enableInstancing = true };
+            matFade = new Material(sh) { name = "TileFade", enableInstancing = true };
+            matFade.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
+            matFade.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
+            matFade.renderQueue = 3000;
+            matSlab = new Material(sh) { name = "Slab" };
+            matSlab.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
+            matSlab.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
+            matSlab.SetColor(IdColor, new Color(1f, 1f, 1f, 0.55f));
+            matSlab.renderQueue = 2999;          // after the solid tiles, before the fading ones
+        }
+
+        static void NoShadows(Renderer r)
+        {
+            r.shadowCastingMode = ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            r.lightProbeUsage = LightProbeUsage.Off;
+            r.reflectionProbeUsage = ReflectionProbeUsage.Off;
         }
 
         // ------------------------------------------------------------------ setup
@@ -90,12 +162,13 @@ namespace Mahjong.Game
         public void Begin(GameSession session, TileAtlas tileAtlas, bool animateIn)
         {
             Clear();
-            Session = session; atlas = tileAtlas;
+            Session = session;
+            UseAtlas(tileAtlas);
             var L = session.Level.Layout;
             int n = L.Count;
             tiles = new T[n];
-            zOrder = new int[n];
             var minV = new Vector2(float.MaxValue, float.MaxValue); var maxV = new Vector2(float.MinValue, float.MinValue);
+            int maxZ = 0;
             for (int i = 0; i < n; i++)
             {
                 var p = L.Pos[i];
@@ -103,26 +176,30 @@ namespace Mahjong.Game
                 var go = new GameObject("t" + i);
                 go.transform.SetParent(root, false);
                 t.tr = go.transform;
-                t.body = go.AddComponent<SpriteRenderer>();
-                t.body.sortingOrder = p.Z * 10;
-                var ov = new GameObject("o");
-                ov.transform.SetParent(go.transform, false);
-                t.over = ov.AddComponent<SpriteRenderer>();
-                t.over.sprite = atlas.Outline;
-                t.over.sortingOrder = p.Z * 10 + 1;
-                t.over.enabled = false;
+                t.mf = go.AddComponent<MeshFilter>();
+                t.mf.sharedMesh = tileMesh;
+                t.rend = go.AddComponent<MeshRenderer>();
+                t.rend.sharedMaterial = matOpaque;
+                NoShadows(t.rend);
                 t.basePos = WorldPos(p);
                 t.visible = session.Board.Present[i];
                 t.shownKind = session.Board.KindAt[i];
-                t.body.sprite = atlas.Faces[t.shownKind];
-                t.body.enabled = t.visible;
+                t.rend.enabled = t.visible;
                 tiles[i] = t;
-                zOrder[i] = i;
+                if (p.Z > maxZ) maxZ = p.Z;
                 minV = Vector2.Min(minV, new Vector2(t.basePos.x - CellW * 0.5f, t.basePos.y - CellH * 0.5f));
                 maxV = Vector2.Max(maxV, new Vector2(t.basePos.x + CellW * 0.5f, t.basePos.y + CellH * 0.5f));
             }
-            Array.Sort(zOrder, (a, b) => tiles[b].z.CompareTo(tiles[a].z));
-            worldMin = minV; worldMax = maxV;
+            worldMin = minV; worldMax = maxV; layers = maxZ + 1;
+
+            // centre the board on the pivot and size the slab under it
+            Vector2 c = (worldMin + worldMax) * 0.5f;
+            root.localPosition = new Vector3(-c.x, -c.y, 0f);
+            if (slabMf.sharedMesh != null) Destroy(slabMf.sharedMesh);
+            slabMf.sharedMesh = TileMesh.BuildSlab((worldMax.x - worldMin.x) * 0.5f + SlabPad, (worldMax.y - worldMin.y) * 0.5f + SlabPad,
+                                                    new Color32(14, 34, 38, 255), new Color32(6, 16, 20, 255));
+            slabTr.localPosition = new Vector3(c.x, c.y, 0f);
+
             selected = -1; combo = 0; BestCombo = 0; ended = false; stuckCheckAt = -1f; winAt = -1f;
             zoom = 1f; pan = Vector2.zero;
             if (animateIn && !Settings.reducedMotion)
@@ -135,9 +212,10 @@ namespace Mahjong.Game
                 }
             }
             RefreshFree();
-            lastViewport = new Rect(-1, -1, 0, 0);
+            shownTilt = TargetTilt; shownRoll = TargetRoll;
+            ViewTarget(out viewMin, out viewMax, out viewLayers);   // start already framing the tiles that are on the board
             ApplyCamera(true);
-            ApplyTints();
+            Animate(0f);                            // give every tile its first look before the first frame draws
         }
 
         public void Clear()
@@ -147,21 +225,37 @@ namespace Mahjong.Game
             tiles = null; Session = null;
         }
 
+        /// <summary>Position of a layout cell in board space. Layers stack straight up, towards the camera (-z).</summary>
         public static Vector3 WorldPos(TilePos p)
         {
-            return new Vector3(p.X * 0.5f * CellW + CellW * 0.5f + p.Z * LayerDx,
-                               -(p.Y * 0.5f * CellH + CellH * 0.5f) + p.Z * LayerDy, 0f);
+            return new Vector3(p.X * 0.5f * CellW + CellW * 0.5f,
+                               -(p.Y * 0.5f * CellH + CellH * 0.5f),
+                               -p.Z * TileMesh.Thick);
         }
+
+        Vector3 ToWorld(Vector3 board) { return root.TransformPoint(board); }
 
         public void SetAtlas(TileAtlas newAtlas)
         {
-            atlas = newAtlas;
+            UseAtlas(newAtlas);
             if (tiles == null) return;
             for (int i = 0; i < tiles.Length; i++)
             {
-                tiles[i].body.sprite = atlas.Faces[tiles[i].shownKind];
-                tiles[i].over.sprite = atlas.Outline;
+                tiles[i].mf.sharedMesh = tileMesh;
+                tiles[i].faceSent = -1;
             }
+        }
+
+        void UseAtlas(TileAtlas a)
+        {
+            if (a == atlas && tileMesh != null) return;
+            atlas = a;
+            var old = tileMesh;
+            tileMesh = TileMesh.BuildTile(a.Style);
+            matOpaque.SetTexture(IdTex, a.Texture);
+            matFade.SetTexture(IdTex, a.Texture);
+            if (tiles != null) for (int i = 0; i < tiles.Length; i++) tiles[i].mf.sharedMesh = tileMesh;
+            if (old != null) Destroy(old);
         }
 
         // ------------------------------------------------------------------ actions
@@ -211,9 +305,7 @@ namespace Mahjong.Game
             {
                 var t = tiles[id];
                 t.removeT = 0f; t.removeTo = mid; t.selected = false; t.hintT = -1f;
-                t.body.sortingOrder = t.z * 10 + 300;
-                t.over.sortingOrder = t.z * 10 + 301;
-                if (!reduce) SpawnPuffs(t.basePos, 5);
+                if (!reduce) SpawnPuffs(t.basePos + new Vector3(0f, 0f, -TileMesh.Thick), 5);
             }
             RefreshFree();
             ClearAssist();
@@ -267,7 +359,7 @@ namespace Mahjong.Game
             tiles[a].hintT = 0f; tiles[c].hintT = 0f;
         }
 
-        /// <summary>Brings the sprites in line with the session board (after undo, shuffle or a resume).</summary>
+        /// <summary>Brings the tiles in line with the session board (after undo, shuffle or a resume).</summary>
         public void Sync(bool animate)
         {
             if (tiles == null) return;
@@ -279,20 +371,20 @@ namespace Mahjong.Game
                 bool present = b.Present[i];
                 if (present && !t.visible)
                 {
-                    t.visible = true; t.body.enabled = true; t.removeT = -1f;
-                    t.body.sortingOrder = t.z * 10; t.over.sortingOrder = t.z * 10 + 1;
+                    t.visible = true; t.rend.enabled = true; t.removeT = -1f;
                     t.popT = animate && !reduce ? 0f : -1f;
                     if (animate && reduce) t.popT = 0.8f;
                 }
                 else if (!present && t.visible)
                 {
-                    t.visible = false; t.body.enabled = false; t.over.enabled = false; t.removeT = -1f;
+                    t.visible = false; t.rend.enabled = false; t.removeT = -1f;
                 }
                 if (present && t.shownKind != b.KindAt[i])
                 {
+                    // a flip already under way keeps showing the face it started from
+                    if (!(t.flipT >= 0f)) t.prevKind = t.shownKind;
                     t.shownKind = b.KindAt[i];
-                    if (animate && !reduce) { t.flipT = 0f; t.flipSwapped = false; }
-                    else t.body.sprite = atlas.Faces[t.shownKind];
+                    if (animate && !reduce) t.flipT = 0f;
                 }
                 t.hintT = -1f;
             }
@@ -359,8 +451,11 @@ namespace Mahjong.Game
 
         // ------------------------------------------------------------------ puffs
 
+        /// <summary>Sparkles at a point in board space. They are flat sprites facing the camera, a little in front of the tile.</summary>
         void SpawnPuffs(Vector3 at, int count)
         {
+            Vector3 w = ToWorld(at) + new Vector3(0f, 0f, -0.4f);
+            const float startScale = 0.16f;
             for (int i = 0; i < count; i++)
             {
                 Puff p = default(Puff);
@@ -379,8 +474,9 @@ namespace Mahjong.Game
                 float sp = 1.2f + UnityEngine.Random.value * 1.8f;
                 p.vel = new Vector2(Mathf.Cos(ang), Mathf.Sin(ang)) * sp;
                 p.t = 0f; p.life = 0.45f + UnityEngine.Random.value * 0.2f; p.live = true;
-                p.tr.position = at + new Vector3(UnityEngine.Random.value * 0.4f - 0.2f, UnityEngine.Random.value * 0.4f - 0.2f, 0);
+                p.tr.position = w + new Vector3(UnityEngine.Random.value * 0.4f - 0.2f, UnityEngine.Random.value * 0.4f - 0.2f, 0);
                 p.sr.enabled = true;
+                p.tr.localScale = new Vector3(startScale, startScale, 1f);
                 p.sr.color = new Color(1f, 0.95f, 0.7f, 0.9f);
                 puffs[idx] = p;
             }
@@ -438,16 +534,23 @@ namespace Mahjong.Game
             }
         }
 
-        void ApplyTints()
+        static bool Near(Color a, Color b)
         {
-            if (tiles == null) return;
-            float dim = Settings.dimBlocked == 0 ? 1f : (Settings.dimBlocked == 1 ? 0.88f : 0.72f);
-            for (int i = 0; i < tiles.Length; i++)
-            {
-                var t = tiles[i];
-                float v = t.free ? 1f : dim;
-                var c = t.body.color; c.r = v; c.g = v; c.b = v; t.body.color = c;
-            }
+            return Mathf.Abs(a.r - b.r) < 0.004f && Mathf.Abs(a.g - b.g) < 0.004f && Mathf.Abs(a.b - b.b) < 0.004f && Mathf.Abs(a.a - b.a) < 0.004f;
+        }
+
+        /// <summary>Hands a tile its face, tint, fade and glow. Does nothing when nothing changed.</summary>
+        void Paint(T t, int faceKind, Color tint, Color glow)
+        {
+            bool fade = tint.a < 0.995f;
+            if (fade != t.fadeSent) { t.rend.sharedMaterial = fade ? matFade : matOpaque; t.fadeSent = fade; }
+            if (faceKind == t.faceSent && Near(tint, t.tintSent) && Near(glow, t.glowSent)) return;
+            t.faceSent = faceKind; t.tintSent = tint; t.glowSent = glow;
+            Mpb.Clear();
+            Mpb.SetVector(IdFace, atlas.FaceUv(faceKind));
+            Mpb.SetColor(IdColor, tint);
+            Mpb.SetColor(IdGlow, glow);
+            t.rend.SetPropertyBlock(Mpb);
         }
 
         void Animate(float dt)
@@ -461,6 +564,8 @@ namespace Mahjong.Game
                 if (!t.visible && t.removeT < 0f) continue;
 
                 Vector3 pos = t.basePos; Vector3 scale = Vector3.one; float alpha = 1f;
+                Quaternion rot = Quaternion.identity;
+                int face = t.shownKind;
 
                 if (t.spawnT < 1f)
                 {
@@ -469,7 +574,8 @@ namespace Mahjong.Game
                     {
                         t.spawnT = Mathf.Min(1f, t.spawnT + dt / 0.32f);
                         float k = EaseOutBack(t.spawnT);
-                        pos.y += (1f - k) * (2.4f + 0.4f * t.z);
+                        pos.z -= (1f - k) * (3.2f + 0.5f * t.z);        // settle down onto the table
+                        pos.y += (1f - k) * 0.9f;
                         alpha = Mathf.Clamp01(t.spawnT * 4f);
                     }
                 }
@@ -478,12 +584,13 @@ namespace Mahjong.Game
                     t.removeT += dt / (reduce ? 0.12f : 0.3f);
                     float k = Mathf.Clamp01(t.removeT);
                     pos = Vector3.Lerp(t.basePos, t.removeTo, k * 0.75f);
+                    pos.z -= Mathf.Sin(k * Mathf.PI * 0.8f) * 0.9f;     // lift off the table
                     float s = reduce ? 1f : Mathf.Lerp(1f, 0.55f, k);
-                    scale = new Vector3(s, s, 1f);
+                    scale = new Vector3(s, s, s);
                     alpha = 1f - k;
                     if (t.removeT >= 1f)
                     {
-                        t.removeT = -1f; t.visible = false; t.body.enabled = false; t.over.enabled = false;
+                        t.removeT = -1f; t.visible = false; t.rend.enabled = false;
                         continue;
                     }
                 }
@@ -492,17 +599,19 @@ namespace Mahjong.Game
                     t.popT += dt / 0.28f;
                     float k = Mathf.Clamp01(t.popT);
                     float s = reduce ? 1f : Mathf.Lerp(0.5f, 1f, EaseOutBack(k));
-                    scale = new Vector3(s, s, 1f);
+                    scale = new Vector3(s, s, s);
                     alpha = Mathf.Clamp01(k * 3f);
                     if (t.popT >= 1f) t.popT = -1f;
                 }
                 if (t.flipT >= 0f)
                 {
-                    t.flipT += dt / 0.4f;
-                    if (t.flipT >= 0.5f && !t.flipSwapped) { t.flipSwapped = true; t.body.sprite = atlas.Faces[t.shownKind]; }
-                    float sx = Mathf.Abs(Mathf.Cos(Mathf.PI * Mathf.Clamp01(t.flipT)));
-                    scale.x *= Mathf.Max(0.02f, sx);
-                    if (t.flipT >= 1f) { t.flipT = -1f; t.body.sprite = atlas.Faces[t.shownKind]; }
+                    // a full turn about the tile's own vertical axis; the new face is swapped in while its back is towards us
+                    t.flipT += dt / 0.5f;
+                    float k = Mathf.Clamp01(t.flipT);
+                    face = k >= 0.5f ? t.shownKind : t.prevKind;
+                    rot = Quaternion.Euler(0f, k * 360f, 0f);
+                    pos.z -= Mathf.Sin(k * Mathf.PI) * 0.8f;
+                    if (t.flipT >= 1f) t.flipT = -1f;
                 }
                 if (t.shakeT >= 0f)
                 {
@@ -512,12 +621,12 @@ namespace Mahjong.Game
                 }
                 if (t.selected)
                 {
-                    float s = reduce ? 1.04f : 1.05f + 0.01f * Mathf.Sin(tm * 7f);
+                    float s = reduce ? 1.02f : 1.03f + 0.01f * Mathf.Sin(tm * 7f);
                     scale *= s;
-                    pos.y += 0.04f;
+                    pos.z -= 0.22f;                                     // picked up off the table
                 }
 
-                // overlay: flash > hint > selected > assist
+                // glow: flash > hint > selected > assist
                 Color oc = Color.clear;
                 if (t.flashT >= 0f)
                 {
@@ -535,12 +644,11 @@ namespace Mahjong.Game
                 }
                 else if (t.selected) oc = new Color(1f, 0.82f, 0.15f, 1f);
                 else if (t.assist) oc = new Color(1f, 1f, 1f, 0.55f + 0.2f * Mathf.Sin(tm * 5f));
-                t.over.enabled = oc.a > 0.01f;
-                if (t.over.enabled) t.over.color = oc;
 
                 float v = (t.free || t.removeT >= 0f) ? 1f : dim;
-                t.body.color = new Color(v, v, v, alpha);
+                Paint(t, face, new Color(v, v, v, alpha), oc);
                 t.tr.localPosition = pos;
+                t.tr.localRotation = rot;
                 t.tr.localScale = scale;
             }
         }
@@ -565,19 +673,49 @@ namespace Mahjong.Game
             return Input.mousePosition;
         }
 
+        /// <summary>Changes the tilt setting by a number of degrees and schedules a save.</summary>
+        public void AdjustTilt(int delta)
+        {
+            int n = Mathf.Clamp(Settings.tilt + delta, 0, MaxTilt);
+            if (n == Settings.tilt) return;
+            Settings.tilt = n;
+            if (App.Instance != null) App.Instance.SaveSoon();
+        }
+
+        /// <summary>
+        /// Tips the board by a number of degrees: dPitch lays the top back (positive) or brings it forward, dRoll pushes the
+        /// right edge away (positive) or the left. Both are clamped to their limits and saved shortly after.
+        /// </summary>
+        public void TiltBy(float dPitch, float dRoll)
+        {
+            if (!tiltDrag) { dragPitch = Settings.tilt; dragRoll = Settings.roll; }
+            dragPitch = Mathf.Clamp(dragPitch + dPitch, 0f, MaxTilt);
+            dragRoll = Mathf.Clamp(dragRoll + dRoll, -MaxRoll, MaxRoll);
+            int p = Mathf.RoundToInt(dragPitch), r = Mathf.RoundToInt(dragRoll);
+            if (p == Settings.tilt && r == Settings.roll) return;
+            Settings.tilt = p; Settings.roll = r;
+            if (App.Instance != null) App.Instance.SaveSoon();
+        }
+
         void HandleInput()
         {
             if (Cam == null || !InputEnabled) { pressed = false; return; }
 
-            // zoom: wheel and pinch
+            // zoom: wheel and pinch. Shift + wheel (or PageUp / PageDown) tilts the board instead.
             float wheel = Input.mouseScrollDelta.y;
+            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             if (Mathf.Abs(wheel) > 0.01f && ViewportPx.Contains(Input.mousePosition) && !OverUi(Input.mousePosition))
-                SetZoom(zoom * (1f + 0.12f * wheel));
+            {
+                if (shift) AdjustTilt(Mathf.RoundToInt(wheel * 5f));
+                else SetZoom(zoom * (1f + 0.12f * wheel));
+            }
+            if (Input.GetKeyDown(KeyCode.PageUp)) AdjustTilt(5);
+            if (Input.GetKeyDown(KeyCode.PageDown)) AdjustTilt(-5);
             if (Input.touchCount == 2)
             {
                 float d = Vector2.Distance(Input.GetTouch(0).position, Input.GetTouch(1).position);
                 if (lastPinch > 1f) SetZoom(zoom * d / lastPinch);
-                lastPinch = d; pressed = false; dragging = false;
+                lastPinch = d; pressed = false; dragging = false; tiltDrag = false;
                 return;
             }
             lastPinch = 0f;
@@ -588,13 +726,20 @@ namespace Mahjong.Game
 
             if (down)
             {
-                pressed = true; dragging = false; pressPos = p; lastPointer = p;
+                pressed = true; dragging = false; tiltDrag = false; pressPos = p; lastPointer = p;
                 pressOverUi = OverUi(p);
+                pressOnTile = !pressOverUi && HitTest(Cam.ScreenPointToRay(new Vector3(p.x, p.y, 0f))) >= 0;
             }
             else if (pressed && !pressOverUi)
             {
+                // a drag that starts on a tile pans a board that is bigger than the screen;
+                // one that starts on the background (slab, table, anything but a tile) tips the board
                 float thr = Mathf.Max(10f, Mathf.Min(Screen.width, Screen.height) * 0.018f);
-                if (!dragging && (p - pressPos).magnitude > thr && CanPan) dragging = true;
+                if (!dragging && !tiltDrag && (p - pressPos).magnitude > thr)
+                {
+                    if (pressOnTile) dragging = CanPan;
+                    else { tiltDrag = true; dragPitch = Settings.tilt; dragRoll = Settings.roll; }
+                }
                 if (dragging)
                 {
                     float ppu = basePpu * zoom;
@@ -602,32 +747,134 @@ namespace Mahjong.Game
                     pan = ClampPan(pan);
                     lastPointer = p;
                 }
+                else if (tiltDrag)
+                {
+                    // dragging up lays the top of the board back; dragging right pushes the right edge away
+                    Vector2 d = (p - lastPointer) * (DragDegPerScreen / Screen.height);
+                    TiltBy(d.y, d.x);
+                    lastPointer = p;
+                }
             }
             if (up && pressed)
             {
-                if (!dragging && !pressOverUi && (p - pressPos).magnitude < Mathf.Max(24f, Screen.height * 0.03f))
-                {
-                    var w = Cam.ScreenToWorldPoint(new Vector3(p.x, p.y, -Cam.transform.position.z));
-                    TapTile(HitTest(w));
-                }
-                pressed = false; dragging = false;
+                if (!dragging && !tiltDrag && !pressOverUi && (p - pressPos).magnitude < Mathf.Max(24f, Screen.height * 0.03f))
+                    TapTile(HitTest(Cam.ScreenPointToRay(new Vector3(p.x, p.y, 0f))));
+                pressed = false; dragging = false; tiltDrag = false;
             }
             if (Input.GetMouseButtonDown(1)) { Deselect(); }
         }
 
-        public int HitTest(Vector3 w)
+        /// <summary>The nearest tile the ray passes through, or -1. Tests each tile's box in board space, so stacks pick the top tile.</summary>
+        public int HitTest(Ray ray)
         {
-            for (int k = 0; k < zOrder.Length; k++)
+            if (tiles == null) return -1;
+            Vector3 o = root.InverseTransformPoint(ray.origin);
+            Vector3 d = root.InverseTransformDirection(ray.direction);
+            int best = -1; float bestT = float.MaxValue;
+            for (int i = 0; i < tiles.Length; i++)
             {
-                int i = zOrder[k];
                 var t = tiles[i];
                 if (!t.visible || t.removeT >= 0f) continue;
-                if (Mathf.Abs(w.x - t.basePos.x) <= CellW * 0.5f && Mathf.Abs(w.y - t.basePos.y) <= CellH * 0.5f) return i;
+                Vector3 c = t.basePos;
+                float tn, tf;
+                if (!Slab(o.x, d.x, c.x - CellW * 0.5f, c.x + CellW * 0.5f, out tn, out tf)) continue;
+                float a, b;
+                if (!Slab(o.y, d.y, c.y - CellH * 0.5f, c.y + CellH * 0.5f, out a, out b)) continue;
+                tn = Mathf.Max(tn, a); tf = Mathf.Min(tf, b);
+                if (!Slab(o.z, d.z, c.z - TileMesh.Thick, c.z, out a, out b)) continue;
+                tn = Mathf.Max(tn, a); tf = Mathf.Min(tf, b);
+                if (tn > tf || tf < 0f) continue;
+                if (tn < bestT) { bestT = tn; best = i; }
             }
-            return -1;
+            return best;
+        }
+
+        /// <summary>One axis of a ray against a box (slab method). False when the ray runs parallel outside it.</summary>
+        static bool Slab(float o, float d, float lo, float hi, out float tNear, out float tFar)
+        {
+            if (Mathf.Abs(d) < 1e-7f)
+            {
+                tNear = float.MinValue; tFar = float.MaxValue;
+                return o >= lo && o <= hi;
+            }
+            float t0 = (lo - o) / d, t1 = (hi - o) / d;
+            tNear = Mathf.Min(t0, t1); tFar = Mathf.Max(t0, t1);
+            return true;
         }
 
         // ------------------------------------------------------------------ camera
+        //
+        // The camera sits on the -z axis looking at the pivot (the middle of the whole board). The pivot is rotated by
+        // the tilt (about x: lays the top back, brings the bottom edge forward) and the roll (about the vertical: pushes one
+        // side away). "Pixels per unit" is measured at the pivot's depth, so zoom and tile-size logic work as they did with
+        // the flat camera. To put the board in the part of the screen left over by the HUD, to pan, and to centre on the
+        // tiles that are left, the frustum is shifted rather than the camera moved.
+
+        float FocalPx { get { return Screen.height * 0.5f / Mathf.Tan(Fov * 0.5f * Mathf.Deg2Rad); } }
+
+        Quaternion BoardRotation { get { return Quaternion.Euler(shownTilt, -shownRoll, 0f); } }
+
+        /// <summary>
+        /// Where a box of tiles (board-space footprint vmin..vmax, lay layers tall, plus the slab border) lands on screen at
+        /// the given scale and board rotation, as a centre and size in pixels measured from the optical axis.
+        /// </summary>
+        void ProjectBounds(float ppu, Quaternion rot, Vector2 vmin, Vector2 vmax, float lay, out Vector2 center, out Vector2 size)
+        {
+            float f = FocalPx, dist = f / ppu;
+            Vector2 mid = (vmin + vmax) * 0.5f - (worldMin + worldMax) * 0.5f;      // relative to the pivot
+            float hx = (vmax.x - vmin.x) * 0.5f + SlabPad, hy = (vmax.y - vmin.y) * 0.5f + SlabPad;
+            float zTop = -lay * TileMesh.Thick, zBack = TileMesh.SlabTop + TileMesh.SlabDepth;
+            float x0 = float.MaxValue, x1 = float.MinValue, y0 = float.MaxValue, y1 = float.MinValue;
+            for (int ix = 0; ix < 2; ix++)
+                for (int iy = 0; iy < 2; iy++)
+                    for (int iz = 0; iz < 2; iz++)
+                    {
+                        Vector3 q = rot * new Vector3(mid.x + (ix == 0 ? -hx : hx), mid.y + (iy == 0 ? -hy : hy), iz == 0 ? zTop : zBack);
+                        float depth = Mathf.Max(0.1f, dist + q.z);
+                        float px = f * q.x / depth, py = f * q.y / depth;
+                        if (px < x0) x0 = px; if (px > x1) x1 = px;
+                        if (py < y0) y0 = py; if (py > y1) y1 = py;
+                    }
+            center = new Vector2((x0 + x1) * 0.5f, (y0 + y1) * 0.5f);
+            size = new Vector2(x1 - x0, y1 - y0);
+        }
+
+        /// <summary>The scale at which that box just fits a viewport of the given size.</summary>
+        float FitPpu(Quaternion rot, Vector2 vmin, Vector2 vmax, float lay, float fitW, float fitH)
+        {
+            float ppu = Mathf.Min(fitW / (vmax.x - vmin.x + 2f * SlabPad), fitH / (vmax.y - vmin.y + 2f * SlabPad));
+            for (int it = 0; it < 8; it++)
+            {
+                Vector2 c, size;
+                ProjectBounds(ppu, rot, vmin, vmax, lay, out c, out size);
+                ppu *= Mathf.Min(fitW / size.x, fitH / size.y);
+            }
+            return ppu;
+        }
+
+        /// <summary>What the camera should frame: the whole board, or with auto zoom just the tiles still standing.</summary>
+        void ViewTarget(out Vector2 mn, out Vector2 mx, out float lay)
+        {
+            mn = worldMin; mx = worldMax; lay = layers;
+            if (tiles == null || Settings == null || !Settings.autoZoom || Settings.reducedMotion) return;
+            var a = new Vector2(float.MaxValue, float.MaxValue); var b = new Vector2(float.MinValue, float.MinValue);
+            int zTop = -1;
+            for (int i = 0; i < tiles.Length; i++)
+            {
+                var t = tiles[i];
+                if (!t.visible || t.removeT >= 0f) continue;       // matched tiles are on their way out
+                a = Vector2.Min(a, new Vector2(t.basePos.x - CellW * 0.5f, t.basePos.y - CellH * 0.5f));
+                b = Vector2.Max(b, new Vector2(t.basePos.x + CellW * 0.5f, t.basePos.y + CellH * 0.5f));
+                if (t.z > zTop) zTop = t.z;
+            }
+            if (zTop < 0) { mn = viewMin; mx = viewMax; lay = viewLayers; return; }   // nothing left: hold the last view
+            mn = a; mx = b; lay = zTop + 1;
+        }
+
+        static float Ease(float shown, float target, float rate, float dt)
+        {
+            return Mathf.Abs(shown - target) > 0.05f ? Mathf.Lerp(shown, target, 1f - Mathf.Exp(-rate * dt)) : target;
+        }
 
         void SetZoom(float z)
         {
@@ -638,53 +885,81 @@ namespace Mahjong.Game
         Vector2 ClampPan(Vector2 p)
         {
             float ppu = basePpu * zoom;
-            float bw = (worldMax.x - worldMin.x), bh = (worldMax.y - worldMin.y);
-            float vw = ViewportPx.width / ppu, vh = ViewportPx.height / ppu;
-            float mx = Mathf.Max(0f, (bw - vw) * 0.5f + 0.5f), my = Mathf.Max(0f, (bh - vh) * 0.5f + 0.5f);
+            Vector2 c, size;
+            ProjectBounds(ppu, BoardRotation, viewMin, viewMax, viewLayers, out c, out size);
+            float mx = Mathf.Max(0f, (size.x - ViewportPx.width) * 0.5f + 0.5f * ppu) / ppu;
+            float my = Mathf.Max(0f, (size.y - ViewportPx.height) * 0.5f + 0.5f * ppu) / ppu;
             return new Vector2(Mathf.Clamp(p.x, -mx, mx), Mathf.Clamp(p.y, -my, my));
         }
 
         void ApplyCamera(bool force)
         {
             if (Cam == null || tiles == null) return;
-            var vp = ViewportPx;
-            if (!force && lastViewport == vp && lastScreen.x == Screen.width && lastScreen.y == Screen.height && !zoomDirty) { PositionCamera(); return; }
-            lastViewport = vp; lastScreen = new Vector2(Screen.width, Screen.height); zoomDirty = false;
 
-            float margin = 0.5f;
-            float bw = (worldMax.x - worldMin.x) + margin, bh = (worldMax.y - worldMin.y) + margin;
-            float fit = Mathf.Min(vp.width / bw, vp.height / bh);
+            // ease the shown tilt and roll towards the settings, and the framed area towards the tiles that are left
+            float dt = Time.unscaledDeltaTime;
+            shownTilt = Ease(shownTilt, TargetTilt, 14f, dt);
+            shownRoll = Ease(shownRoll, TargetRoll, 14f, dt);
+            Vector2 tmn, tmx; float tl;
+            ViewTarget(out tmn, out tmx, out tl);
+            if (force) { viewMin = tmn; viewMax = tmx; viewLayers = tl; }
+            else
+            {
+                float k = 1f - Mathf.Exp(-AutoZoomRate * dt);
+                viewMin = Vector2.Lerp(viewMin, tmn, k); viewMax = Vector2.Lerp(viewMax, tmx, k);
+                viewLayers = Mathf.Lerp(viewLayers, tl, k);
+            }
+
+            // the scale at which the framed tiles just fill the viewport. Cheap enough to redo every frame, and it keeps
+            // window resizes, the HUD changing size, tilting and zooming in step with each other.
+            var vp = ViewportPx;
+            float fitW = Mathf.Max(50f, vp.width - 8f), fitH = Mathf.Max(50f, vp.height - 8f);
+            var rot = BoardRotation;
+            float full = FitPpu(rot, worldMin, worldMax, layers, fitW, fitH);
+            float fit = full;
+            if (Settings.autoZoom && !Settings.reducedMotion)
+            {
+                // zoom in on what is left, but not so far that the last few tiles are enormous
+                float cap = Mathf.Max(full, Mathf.Min(full * AutoZoomMax, AutoZoomTileFrac * Mathf.Min(vp.width, vp.height) / CellW));
+                fit = Mathf.Min(FitPpu(rot, viewMin, viewMax, viewLayers, fitW, fitH), cap);
+            }
+            AutoZoomFactor = fit / full;
             float dpi = Screen.dpi > 1f ? Screen.dpi : (Application.isMobilePlatform ? 326f : 96f);
             float minMm = Settings.tileSize == 1 ? 9f : (Settings.tileSize == 2 ? 12f : 0f);
             float minPpu = minMm * dpi / 25.4f;
             basePpu = Mathf.Max(fit, minPpu);
-            CanPan = basePpu > fit * 1.001f || zoom > 1.001f;
             pan = ClampPan(pan);
             PositionCamera();
         }
 
-        bool zoomDirty;
-
         void PositionCamera()
         {
             float ppu = basePpu * zoom;
-            Cam.orthographicSize = Screen.height * 0.5f / ppu;
-            Vector2 center = (worldMin + worldMax) * 0.5f;
+            float dist = FocalPx / ppu;
+            pivot.localRotation = BoardRotation;
+            Cam.transform.SetPositionAndRotation(new Vector3(0f, 0f, -dist), Quaternion.identity);
+
+            Vector2 c, size;
+            ProjectBounds(ppu, BoardRotation, viewMin, viewMax, viewLayers, out c, out size);
             Vector2 vc = new Vector2(ViewportPx.x + ViewportPx.width * 0.5f, ViewportPx.y + ViewportPx.height * 0.5f);
             Vector2 sc = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
-            Vector2 offsetWorld = (vc - sc) / ppu;
-            Cam.transform.position = new Vector3(center.x - offsetWorld.x + pan.x, center.y - offsetWorld.y + pan.y, -10f);
-            CanPan = (worldMax.x - worldMin.x + 0.5f) * ppu > ViewportPx.width * 1.002f || (worldMax.y - worldMin.y + 0.5f) * ppu > ViewportPx.height * 1.002f;
+            // where on screen the optical axis should land so the board's centre sits in the viewport (less the pan)
+            Vector2 o = (vc - sc) - c - pan * ppu;
+
+            float near = Mathf.Max(0.3f, dist * 0.25f), far = dist + 200f;
+            float hn = near * Mathf.Tan(Fov * 0.5f * Mathf.Deg2Rad);
+            float aspect = (float)Screen.width / Screen.height;
+            float k = 2f * hn / Screen.height;       // near-plane units per pixel
+            Cam.projectionMatrix = Matrix4x4.Frustum(-hn * aspect - k * o.x, hn * aspect - k * o.x, -hn - k * o.y, hn - k * o.y, near, far);
+
+            CanPan = size.x > ViewportPx.width * 1.002f || size.y > ViewportPx.height * 1.002f;
         }
 
-        /// <summary>Screen position of a tile (used by tutorials and automated tests).</summary>
+        /// <summary>Screen position of a tile's face (used by tutorials and automated tests).</summary>
         public Vector2 TileScreenPos(int pos)
         {
-            return Cam.WorldToScreenPoint(tiles[pos].basePos);
+            return Cam.WorldToScreenPoint(ToWorld(tiles[pos].basePos + new Vector3(0f, 0f, -TileMesh.Thick)));
         }
-
-        /// <summary>Forces the next frame to recompute the camera fit (tile size setting changed, window resized).</summary>
-        public void Refit() { lastViewport = new Rect(-1, -1, 0, 0); }
 
         public bool IsVisible(int pos) { return tiles != null && tiles[pos].visible; }
         public int SelectedTile { get { return selected; } }

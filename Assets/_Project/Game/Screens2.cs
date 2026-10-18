@@ -180,6 +180,30 @@ namespace Mahjong.Game
             Cycle(label, new[] { "Off", "On" }, () => get() ? 1 : 0, i => set(i == 1), help);
         }
 
+        /// <summary>A row with a slider for a whole-number setting. Saves a moment after the last change.</summary>
+        void SliderRow(string label, int min, int max, Func<int> get, Action<int> set, string unit, string help = null)
+        {
+            var card = UiKit.Round(content, "Row", UiKit.Card, true);
+            UiKit.Size(card, -1, help != null ? 150 : 118);
+            var l = UiKit.Label(card.transform, label, 38, UiKit.Ink, TextAnchor.MiddleLeft);
+            UiKit.Anchor(l.rectTransform, 0, help != null ? 0.38f : 0, 0.4f, 1, 24, 0, 0, 0);
+            if (help != null)
+            {
+                var h = UiKit.Label(card.transform, help, 24, UiKit.InkDim, TextAnchor.UpperLeft);
+                UiKit.Anchor(h.rectTransform, 0, 0, 0.42f, 0.4f, 24, 8, 0, 0);
+            }
+            var val = UiKit.Label(card.transform, get() + unit, 34, UiKit.Gold, TextAnchor.MiddleRight, FontStyle.Bold);
+            UiKit.Anchor(val.rectTransform, 0.84f, 0, 1, 1, 0, 0, -20, 0);
+            var slider = UiKit.NewSlider(card.transform, "Slider", min, max, get(), v =>
+            {
+                set((int)v);
+                val.text = (int)v + unit;
+                app.SaveSoon();
+            });
+            UiKit.Anchor((RectTransform)slider.transform, 0.43f, 0, 0.84f, 1, 0, 0, -8, 0);
+            refreshers.Add(() => { slider.SetValueWithoutNotify(get()); val.text = get() + unit; });
+        }
+
         void BuildRows()
         {
             float[] sfx = { 0f, 0.35f, 0.7f, 1f };
@@ -200,6 +224,12 @@ namespace Mahjong.Game
                 "Tap a blocked tile and the tiles in the way flash.");
             Toggle("Match assist", () => S.matchAssist, v => S.matchAssist = v,
                 "After you pick a tile, its only free partner glows.");
+            SliderRow("Board tilt", 0, BoardView.MaxTilt, () => S.tilt, v => S.tilt = v, "°",
+                "0 looks straight down. Higher tips the board back for a 3D view. Also on the pause menu.");
+            SliderRow("Board roll", -BoardView.MaxRoll, BoardView.MaxRoll, () => S.roll, v => S.roll = v, "°",
+                "Tips the board sideways. In a game, drag the background to change tilt and roll together.");
+            Toggle("Auto zoom", () => S.autoZoom, v => S.autoZoom = v,
+                "Slowly zooms in as fewer tiles are left. Off while Reduced motion is on.");
             Toggle("Reduced motion", () => S.reducedMotion, v => S.reducedMotion = v, "Fewer animations and no particles.");
             Toggle("Left-handed layout", () => S.leftHanded, v => S.leftHanded = v);
 

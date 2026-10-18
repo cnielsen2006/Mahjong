@@ -24,7 +24,7 @@ namespace Mahjong.EditorTools
                 var camGo = new GameObject("Main Camera");
                 camGo.tag = "MainCamera";
                 var cam = camGo.AddComponent<Camera>();
-                cam.orthographic = true;
+                cam.orthographic = false;      // the board is 3D; App.SetupCamera configures the rest at runtime
                 cam.clearFlags = CameraClearFlags.SolidColor;
                 camGo.AddComponent<AudioListener>();
                 EditorSceneManager.SaveScene(scene, ScenePath);
