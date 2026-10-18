@@ -1,7 +1,38 @@
 # Mahjong
 
-A calm, endless Mahjong Solitaire game for Windows and Android, built in Unity 6.
-No ads, no purchases, no accounts, no tracking. Every level is generated from a seed, is guaranteed to be solvable, and is the same for every player.
+<p align="center">
+  <img src="docs/screenshots/board-3d-tilt.png" alt="The Mahjong board tilted in 3D, with free tiles raised above the rest" width="720">
+</p>
+
+**A calm, endless Mahjong Solitaire game for Windows and Android. Free, open source, and yours to improve.**
+
+| | |
+|---|---|
+| **100% local** | Runs entirely on your device. No servers, no accounts, no sign-in, no internet needed. The project contains no networking code. |
+| **No ads** | None. Not now, not "after level 10". |
+| **No costs** | No purchases, no premium tier, no coins or gems, no timers that make you wait. |
+| **No tracking** | No analytics, no telemetry. Your progress is a small save file on your own machine. |
+| **Fair levels** | Every level is generated from a seed, is guaranteed to be solvable, and is the same for every player. |
+| **Open source** | MIT licensed. Read it, fork it, change it, ship your own version. |
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="Home screen" width="330">
+  <img src="docs/screenshots/hint.png" alt="Hint highlighting a matching pair" width="330">
+  <img src="docs/screenshots/portrait.png" alt="Portrait layout on a phone" width="150">
+</p>
+
+## Make it better
+
+This is a hobby project and it is far from finished. Please take it and run with it.
+
+- **Fork it** and do whatever you like with your copy. No permission needed.
+- **Send changes back** with a pull request if you want them in this version. Every change to `main` is reviewed by the maintainer before it is merged, and nothing is pushed here directly by anyone else.
+- Ideas that would help most (see [docs/IMPLEMENTATION_NOTES.md](docs/IMPLEMENTATION_NOTES.md) for the full list):
+  - More tile layouts. 11 are drawn today; the plan was 24. Each is a few lines of ASCII art in `LayoutLibrary.cs`.
+  - Keyboard navigation and screen-reader support.
+  - Haptics, more languages, more tile sets and backgrounds.
+  - Testing on real Android devices, and on Linux and macOS, to confirm levels generate identically everywhere.
+- Before you change generation code, read the [determinism rules](#determinism-rules-do-not-break-these) and run the core tests.
 
 Unity version: **6000.6.4f1**. All art and audio are drawn and synthesised in code, so there are no imported assets.
 
