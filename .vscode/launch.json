@@ -1,0 +1,39 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Mahjong: play (windowed)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "Start-Process -FilePath '${workspaceFolder}\\Builds\\Windows\\Mahjong.exe' -ArgumentList '-screen-width','1280','-screen-height','800','-screen-fullscreen','0'",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Mahjong: play (fullscreen)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "Start-Process -FilePath '${workspaceFolder}\\Builds\\Windows\\Mahjong.exe' -ArgumentList '-screen-fullscreen','1'",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Mahjong: build, then play",
+            "type": "node-terminal",
+            "request": "launch",
+            "preLaunchTask": "Build Windows player",
+            "command": "Start-Process -FilePath '${workspaceFolder}\\Builds\\Windows\\Mahjong.exe' -ArgumentList '-screen-width','1280','-screen-height','800','-screen-fullscreen','0'",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Mahjong: in-engine autotest",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "powershell -NoProfile -File tools\\build_and_test.ps1 -SkipBuild",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Attach to Unity",
+            "type": "vstuc",
+            "request": "attach"
+        }
+    ]
+}
