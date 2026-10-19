@@ -14,7 +14,9 @@ namespace Mahjong.Game
         // row; narrow ones (portrait, large text) put the buttons on a second row. Either way the board gets the rest.
         const float OneRowH = 120f, TwoRowH = 190f, TwoRowBelow = 1100f;
 
-        RectTransform top, controls, pipRect, banner, comboRoot, stuckCard;
+        RectTransform top, controls, pipRect, banner, comboRoot, stuckCard, comboBar, comboFill;
+        Image comboFillImg;
+        Text comboBarLbl;
         float topH = OneRowH;
         Text titleLbl, remainLbl, bannerLbl, comboLbl, debugLbl, stuckLbl;
         Image[] pips = new Image[5];
@@ -31,7 +33,7 @@ namespace Mahjong.Game
         BoardView board;
         float elapsed;
         bool paused, won, dirty;
-        float lastProgress, idleSince, comboUntil, autoNextAt = -1f;
+        float lastProgress, idleSince, comboUntil, comboShownAt, comboPop, autoNextAt = -1f;
         int bannerLevel;
         float bannerUntil;
         const float BannerSeconds = 6f;
@@ -111,7 +113,16 @@ namespace Mahjong.Game
             UiKit.Stretch(comboLbl.rectTransform);
             comboRoot.gameObject.SetActive(false);
 
-            debugLbl = UiKit.Label(Root, "", 24, new Color(1, 1, 1, 0.75f), TextAnchor.LowerLeft);
+            // ---- combo timer: a bar down the side that drains while the chain is alive
+            comboBar = UiKit.Round(Root, "ComboBar", new Color(0f, 0f, 0f, 0.35f)).rectTransform;
+            comboFill = UiKit.Round(comboBar, "Fill", UiKit.Gold).rectTransform;
+            comboFillImg = comboFill.GetComponent<Image>();
+            comboBarLbl = UiKit.Label(Root, "", 30, UiKit.Gold, TextAnchor.MiddleCenter, FontStyle.Bold);
+            UiKit.Emboss(comboBarLbl);
+            comboBar.gameObject.SetActive(false);
+            comboBarLbl.gameObject.SetActive(false);
+
+            debugLbl =UiKit.Label(Root, "", 24, new Color(1, 1, 1, 0.75f), TextAnchor.LowerLeft);
             UiKit.Anchor(debugLbl.rectTransform, 0, 0, 0.7f, 0.12f, 12, 6, 0, 0);
             debugLbl.resizeTextForBestFit = false;
 
@@ -214,6 +225,7 @@ namespace Mahjong.Game
             idleSince = Time.unscaledTime; lastProgress = Time.unscaledTime;
             pausePanel.SetActive(false); winPanel.SetActive(false); confirmPanel.SetActive(false); stuckCard.gameObject.SetActive(false);
             comboRoot.gameObject.SetActive(false);
+            comboBar.gameObject.SetActive(false); comboBarLbl.gameObject.SetActive(false);
 
             board.Begin(Session, app.Atlas, r.ResumeLog == null || r.ResumeLog.Count == 0);
             board.InputEnabled = true;
@@ -293,12 +305,39 @@ namespace Mahjong.Game
             float s = app.UiScale;
             // the tile count floats in the lower right corner of the screen
             UiKit.Fixed(remainLbl.rectTransform, 1f, 0f, 300, 44, -(Screen.width - sa.xMax) / s - 16, sa.yMin / s + 8);
+            // the combo timer runs down the screen edge on the playing hand's side
+            const float barW = 14f, barGap = 8f;
+            float edge = left ? sa.xMin / s + barGap : -((Screen.width - sa.xMax) / s + barGap);
+            float bx = left ? 0f : 1f;
+            float barTop = topH + 70f, barBottom = sa.yMin / s + 90f;                // insets from the screen top / bottom
+            comboBar.anchorMin = new Vector2(bx, 0f); comboBar.anchorMax = new Vector2(bx, 1f);
+            comboBar.pivot = new Vector2(bx, 0.5f);
+            comboBar.sizeDelta = new Vector2(barW, -(barTop + barBottom));
+            comboBar.anchoredPosition = new Vector2(edge, (barBottom - barTop) * 0.5f);
+            var lr = comboBarLbl.rectTransform;
+            lr.anchorMin = lr.anchorMax = new Vector2(bx, 1f);
+            lr.pivot = new Vector2(0.5f, 1f);
+            lr.sizeDelta = new Vector2(70, 40);
+            lr.anchoredPosition = new Vector2(edge + (left ? 1f : -1f) * barW * 0.5f, -(topH + 24f));
             float pad = 10f * s;
             float yMax = sa.yMax - topH * s - pad;
             float yMin = sa.yMin + pad, xMin = sa.xMin + pad, xMax = sa.xMax - pad;
             if (banner.gameObject.activeSelf) yMax -= (bannerH + 10) * s;
             board.ViewportPx = new Rect(xMin, yMin, Mathf.Max(100, xMax - xMin), Mathf.Max(100, yMax - yMin));
             stuckCard.anchoredPosition = new Vector2(0, -topH - 20 - (banner.gameObject.activeSelf ? 160 : 0));
+        }
+
+        /// <summary>Drains the side bar as the time left to keep the chain alive runs out.</summary>
+        void UpdateComboBar()
+        {
+            float f = won || !app.S.showComboTimer ? 0f : board.ComboLeft01;
+            bool show = f > 0f;
+            if (comboBar.gameObject.activeSelf != show) { comboBar.gameObject.SetActive(show); comboBarLbl.gameObject.SetActive(show); }
+            if (!show) return;
+            comboFill.anchorMin = Vector2.zero; comboFill.anchorMax = new Vector2(1f, f);
+            comboFill.offsetMin = Vector2.zero; comboFill.offsetMax = Vector2.zero;
+            comboFillImg.color = f > 0.5f ? UiKit.Gold : Color.Lerp(new Color(0.9f, 0.3f, 0.25f), UiKit.Gold, f * 2f);
+            comboBarLbl.text = "x" + board.Combo;
         }
 
         void HideBanner()
@@ -328,10 +367,13 @@ namespace Mahjong.Game
                 else
                 {
                     var c = comboLbl.color; c.a = Mathf.Clamp01(left / 0.4f); comboLbl.color = c;
-                    float k = 1f + 0.15f * Mathf.Clamp01((left - 0.7f) / 0.3f);
+                    float pop = Mathf.Clamp01(1f - (Time.unscaledTime - comboShownAt) / 0.3f);
+                    float k = 1f + (app.S.reducedMotion ? 0f : comboPop * pop);
                     comboRoot.localScale = new Vector3(k, k, 1);
                 }
             }
+
+            UpdateComboBar();
 
             if (banner.gameObject.activeSelf && !modal && Time.unscaledTime >= bannerUntil) HideBanner();
 
@@ -455,10 +497,18 @@ namespace Mahjong.Game
             idleSince = Time.unscaledTime;
             if (combo >= 2)
             {
-                comboLbl.text = "Combo x" + Mathf.Min(combo, 9);
-                var c = comboLbl.color; c.a = 1f; comboLbl.color = c;
+                // the flourish grows with the chain: bigger pop, longer stay and a new colour at each milestone
+                string word; Color col; float hold;
+                if (combo >= 20) { word = "Legendary! x"; col = new Color(0.55f, 0.85f, 1f); comboPop = 0.45f; hold = 1.6f; }
+                else if (combo >= 15) { word = "Incredible! x"; col = new Color(1f, 0.5f, 0.7f); comboPop = 0.40f; hold = 1.5f; }
+                else if (combo >= 10) { word = "Blazing! x"; col = new Color(1f, 0.6f, 0.25f); comboPop = 0.35f; hold = 1.4f; }
+                else if (combo >= 5) { word = "Combo x"; col = UiKit.Gold; comboPop = 0.25f; hold = 1.2f; }
+                else { word = "Combo x"; col = UiKit.Gold; comboPop = 0.15f; hold = 1.1f; }
+                comboLbl.text = word + combo;
+                comboLbl.color = col;
                 comboRoot.gameObject.SetActive(true);
-                comboUntil = Time.unscaledTime + 1.1f;
+                comboShownAt = Time.unscaledTime;
+                comboUntil = comboShownAt + hold;
             }
             stuckCard.gameObject.SetActive(false);
         }

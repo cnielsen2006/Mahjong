@@ -74,6 +74,20 @@ namespace Mahjong.Game
         float lastMatchTime = -10f;
         int combo;
         public int BestCombo { get; private set; }
+        public const float ComboWindow = 3f;         // seconds allowed between matches to keep a combo alive
+
+        /// <summary>Chain length so far (0 when no chain is alive).</summary>
+        public int Combo { get { return ComboLeft01 > 0f ? combo : 0; } }
+
+        /// <summary>How much of the combo window is left, 1 right after a match falling to 0 when the chain lapses.</summary>
+        public float ComboLeft01
+        {
+            get
+            {
+                if (combo <= 0 || ended) return 0f;
+                return Mathf.Clamp01(1f - (Time.unscaledTime - lastMatchTime) / ComboWindow);
+            }
+        }
         float stuckCheckAt = -1f;
         float winAt = -1f;
         bool ended;
@@ -304,7 +318,7 @@ namespace Mahjong.Game
         {
             if (!Session.Match(a, c)) return;
             float now = Time.unscaledTime;
-            combo = (now - lastMatchTime < 3f) ? combo + 1 : 1;
+            combo = (now - lastMatchTime < ComboWindow) ? combo + 1 : 1;
             lastMatchTime = now;
             if (combo > BestCombo) BestCombo = combo;
             bool reduce = Settings.reducedMotion;
