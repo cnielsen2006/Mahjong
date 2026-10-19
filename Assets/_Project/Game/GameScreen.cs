@@ -10,9 +10,12 @@ namespace Mahjong.Game
     /// <summary>The play screen: HUD, controls and the pause / win / stuck panels around the board.</summary>
     public sealed class GameScreen : ScreenBase
     {
-        const float TopH = 120f, BottomH = 140f, SideW = 230f;
+        // The top bar holds the menu, title, tile count and the Hint / Undo / Shuffle buttons. Wide screens fit them in one
+        // row; narrow ones (portrait, large text) put the buttons on a second row. Either way the board gets the rest.
+        const float OneRowH = 120f, TwoRowH = 190f, TwoRowBelow = 1100f;
 
-        RectTransform top, controls, banner, comboRoot, stuckCard;
+        RectTransform top, controls, pipRect, banner, comboRoot, stuckCard;
+        float topH = OneRowH;
         Text titleLbl, remainLbl, bannerLbl, comboLbl, debugLbl, stuckLbl;
         Image[] pips = new Image[5];
         Button menuBtn, hintBtn, undoBtn, shuffleBtn;
@@ -57,13 +60,10 @@ namespace Mahjong.Game
             top = UiKit.NewRect("Top", Root);
             UiKit.Anchor(top, 0, 1, 1, 1);
             top.pivot = new Vector2(0.5f, 1f);
-            top.sizeDelta = new Vector2(0, TopH);
-            top.offsetMin = new Vector2(0, -TopH); top.offsetMax = Vector2.zero;
             var tbg = UiKit.Img(top, "Bg", new Color(0f, 0f, 0f, 0.28f));
             UiKit.Stretch(tbg.rectTransform);
 
             menuBtn = UiKit.Btn(top, "", OpenPause, UiKit.Secondary, 30, "Menu");
-            UiKit.Fixed(menuBtn.GetComponent<RectTransform>(), 0f, 0.5f, 86, 90, 18, -2);
             for (int i = 0; i < 3; i++)
             {
                 var bar = UiKit.Img(UiKit.Face(menuBtn), "bar", UiKit.Ink);
@@ -72,23 +72,22 @@ namespace Mahjong.Game
             }
 
             titleLbl = UiKit.Label(top, "Level 1", 46, UiKit.Ink, TextAnchor.MiddleCenter, FontStyle.Bold);
-            UiKit.Anchor(titleLbl.rectTransform, 0.2f, 0.42f, 0.8f, 1f, 0, 0, 0, -6);
             var pipRow = UiKit.HStack(top, "Pips", 10, TextAnchor.MiddleCenter, false);
             pipRow.childForceExpandWidth = false;
-            UiKit.Anchor((RectTransform)pipRow.transform, 0.3f, 0f, 0.7f, 0.42f, 0, 8, 0, 0);
+            pipRect = (RectTransform)pipRow.transform;
             for (int i = 0; i < 5; i++)
             {
                 pips[i] = UiKit.Img(pipRow.transform, "pip", Color.white, TileArt.CircleSprite());
                 UiKit.Size(pips[i], 20, 20);
             }
-            remainLbl = UiKit.Label(top, "0 tiles", 32, UiKit.InkDim, TextAnchor.MiddleRight);
-            UiKit.Anchor(remainLbl.rectTransform, 0.72f, 0f, 1f, 1f, 0, 0, -24, 0);
+            remainLbl = UiKit.Label(Root, "0 tiles", 30, UiKit.InkDim, TextAnchor.LowerRight);
+            UiKit.Emboss(remainLbl);
 
             // ---- controls (Hint / Undo / Shuffle)
-            controls = UiKit.NewRect("Controls", Root);
-            hintBtn = UiKit.Btn(controls, "Hint", DoHint, new Color(0.20f, 0.52f, 0.72f), 36, "Hint");
-            undoBtn = UiKit.Btn(controls, "Undo", DoUndo, UiKit.Secondary, 36, "Undo");
-            shuffleBtn = UiKit.Btn(controls, "Shuffle", DoShuffle, new Color(0.62f, 0.42f, 0.20f), 36, "Shuffle");
+            controls = UiKit.NewRect("Controls", top);
+            hintBtn = UiKit.Btn(controls, "Hint", DoHint, new Color(0.20f, 0.52f, 0.72f), 32, "Hint");
+            undoBtn = UiKit.Btn(controls, "Undo", DoUndo, UiKit.Secondary, 32, "Undo");
+            shuffleBtn = UiKit.Btn(controls, "Shuffle", DoShuffle, new Color(0.62f, 0.42f, 0.20f), 32, "Shuffle");
             ctl[0] = hintBtn; ctl[1] = undoBtn; ctl[2] = shuffleBtn;
 
             // ---- tutorial banner
@@ -106,7 +105,7 @@ namespace Mahjong.Game
 
             // ---- combo flourish
             comboRoot = UiKit.NewRect("Combo", Root);
-            UiKit.Fixed(comboRoot, 0.5f, 1f, 600, 90, 0, -TopH - 8);
+            UiKit.Fixed(comboRoot, 0.5f, 1f, 600, 90, 0, -topH - 8);
             comboRoot.pivot = new Vector2(0.5f, 1f);
             comboLbl = UiKit.Label(comboRoot, "", 58, UiKit.Gold, TextAnchor.MiddleCenter, FontStyle.Bold);
             UiKit.Stretch(comboLbl.rectTransform);
@@ -141,7 +140,7 @@ namespace Mahjong.Game
         void BuildStuckCard()
         {
             stuckCard = UiKit.Round(Root, "Stuck", UiKit.Card, true).rectTransform;
-            UiKit.Fixed(stuckCard, 0.5f, 1f, 760, 230, 0, -TopH - 20);
+            UiKit.Fixed(stuckCard, 0.5f, 1f, 760, 230, 0, -topH - 20);
             stuckCard.pivot = new Vector2(0.5f, 1f);
             stuckLbl = UiKit.Label(stuckCard, "No more moves", 44, UiKit.Ink, TextAnchor.MiddleCenter, FontStyle.Bold);
             UiKit.Anchor(stuckLbl.rectTransform, 0, 0.55f, 1, 1, 10, 0, -10, -10);
@@ -252,53 +251,54 @@ namespace Mahjong.Game
             bool portrait = app.Portrait;
             bool left = app.S.leftHanded;
 
-            // controls strip
-            if (portrait)
+            Canvas.ForceUpdateCanvases();
+            float rootW = ((RectTransform)Root).rect.width;
+            bool twoRow = rootW < TwoRowBelow;
+            topH = twoRow ? TwoRowH : OneRowH;
+            top.offsetMin = new Vector2(0, -topH); top.offsetMax = Vector2.zero;
+
+            // Left-handed play mirrors the bar: buttons on the left, menu and tile count on the right.
+            float side = left ? 0f : 1f, other = 1f - side, dir = left ? 1f : -1f;   // dir points inwards from the buttons' edge
+            var menuRt = menuBtn.GetComponent<RectTransform>();
+            if (twoRow)
             {
-                float w = Mathf.Min(660f, ((RectTransform)Root).rect.width - 24f);
-                controls.anchorMin = controls.anchorMax = new Vector2(0.5f, 0f);
-                controls.pivot = new Vector2(0.5f, 0f);
-                controls.sizeDelta = new Vector2(w, BottomH);
-                controls.anchoredPosition = Vector2.zero;
-                for (int i = 0; i < 3; i++)
-                {
-                    var rt = ctl[i].GetComponent<RectTransform>();
-                    UiKit.Anchor(rt, i / 3f, 0.5f, (i + 1) / 3f, 0.5f, 8, -46, -8, 46);
-                }
+                UiKit.Fixed(menuRt, other, 1f, 86, 90, -dir * 14, -8);
+                float lm = left ? 14 : 110, rm = left ? 110 : 14;                      // clear of the menu button
+                UiKit.Anchor(titleLbl.rectTransform, 0, 1, 1, 1, lm, -62, -rm, -4);
+                UiKit.Anchor(pipRect, 0, 1, 1, 1, lm, -98, -rm, -66);
+                UiKit.Anchor(controls, 0, 0, 1, 0, 14, 10, -14, 80);
             }
             else
             {
-                float x = left ? 0f : 1f;
-                controls.anchorMin = new Vector2(x, 0); controls.anchorMax = new Vector2(x, 1);
-                controls.pivot = new Vector2(x, 0.5f);
-                controls.sizeDelta = new Vector2(SideW, -TopH);
-                controls.anchoredPosition = new Vector2(0, -TopH * 0.5f);
-                for (int i = 0; i < 3; i++)
-                {
-                    var rt = ctl[i].GetComponent<RectTransform>();
-                    float cy = (1 - i) * 118f;
-                    UiKit.Anchor(rt, 0, 0.5f, 1, 0.5f, 22, cy - 50, -22, cy + 50);
-                }
+                const float btnW = 140f, gap = 8f, margin = 16f, groupW = btnW * 3 + gap * 2;
+                UiKit.Fixed(menuRt, other, 0.5f, 86, 90, -dir * 18, -2);
+                UiKit.Fixed(controls, side, 0.5f, groupW, 76, dir * margin, -2);
+                float near = 116f, farEdge = margin + groupW + 10;                      // the title sits between the menu and the buttons
+                float lm = left ? farEdge : near, rm = left ? near : farEdge;
+                UiKit.Anchor(titleLbl.rectTransform, 0, 1, 1, 1, lm, -66, -rm, -6);
+                UiKit.Anchor(pipRect, 0, 1, 1, 1, lm, -108, -rm, -70);
             }
+            for (int i = 0; i < 3; i++)
+                UiKit.Anchor(ctl[i].GetComponent<RectTransform>(), i / 3f, 0, (i + 1) / 3f, 1, 4, 0, -4, 0);
 
             // banner just below the top bar
-            UiKit.Fixed(banner, 0.5f, 1f, portrait ? 760 : 720, portrait ? 150 : 130, portrait ? 0 : (left ? SideW : -SideW) * 0.5f, -TopH - 10);
+            float bannerW = Mathf.Min(portrait ? 760f : 720f, rootW - 24f), bannerH = portrait ? 150f : 130f;
+            UiKit.Fixed(banner, 0.5f, 1f, bannerW, bannerH, 0, -topH - 10);
             banner.pivot = new Vector2(0.5f, 1f);
+            UiKit.Fixed(comboRoot, 0.5f, 1f, 600, 90, 0, -topH - 8);
 
-            // viewport for the board, in screen pixels
-            Canvas.ForceUpdateCanvases();
+            // viewport for the board, in screen pixels: everything below the top bar
             var sa = Screen.safeArea;
             if (sa.width <= 0) sa = new Rect(0, 0, Screen.width, Screen.height);
             float s = app.UiScale;
+            // the tile count floats in the lower right corner of the screen
+            UiKit.Fixed(remainLbl.rectTransform, 1f, 0f, 300, 44, -(Screen.width - sa.xMax) / s - 16, sa.yMin / s + 8);
             float pad = 10f * s;
-            float yMax = sa.yMax - TopH * s - pad;
+            float yMax = sa.yMax - topH * s - pad;
             float yMin = sa.yMin + pad, xMin = sa.xMin + pad, xMax = sa.xMax - pad;
-            if (portrait) yMin = sa.yMin + BottomH * s + pad;
-            else if (left) xMin = sa.xMin + SideW * s + pad;
-            else xMax = sa.xMax - SideW * s - pad;
-            if (banner.gameObject.activeSelf) yMax -= ((portrait ? 150 : 130) + 10) * s;
+            if (banner.gameObject.activeSelf) yMax -= (bannerH + 10) * s;
             board.ViewportPx = new Rect(xMin, yMin, Mathf.Max(100, xMax - xMin), Mathf.Max(100, yMax - yMin));
-            stuckCard.anchoredPosition = new Vector2(0, -TopH - 20 - (banner.gameObject.activeSelf ? 160 : 0));
+            stuckCard.anchoredPosition = new Vector2(0, -topH - 20 - (banner.gameObject.activeSelf ? 160 : 0));
         }
 
         void HideBanner()
