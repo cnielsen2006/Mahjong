@@ -44,7 +44,8 @@ namespace Mahjong.EditorTools
             PlayerSettings.allowedAutorotateToPortraitUpsideDown = false;
             PlayerSettings.allowedAutorotateToLandscapeLeft = true;
             PlayerSettings.allowedAutorotateToLandscapeRight = true;
-            PlayerSettings.SplashScreen.showUnityLogo = true;
+            PlayerSettings.SplashScreen.show = false;          // the game draws its own splash (Splash.cs)
+            PlayerSettings.SplashScreen.showUnityLogo = false;
 
             try
             {

@@ -70,6 +70,7 @@ namespace Mahjong.Game
         Task<Raster> atlasTask;
         string atlasTaskId;
         GameObject loadingOverlay;
+        Splash splash;
         float loadingSince = -1f;
 
         Task<Level> levelTask;
@@ -126,9 +127,15 @@ namespace Mahjong.Game
             Board.Settings = S; Board.Audio = Audio; Board.Cam = Cam;
 
             BuildScreens();
+            // the animated splash covers the first load; automated runs skip it so their screenshots show the game
+            if (Array.IndexOf(args, "-autotest") < 0 && Array.IndexOf(args, "-nosplash") < 0)
+            {
+                splash = new Splash((n, v, p) => Audio.Play(n, v, p));
+                splash.Build(Canvas.transform);
+            }
             ApplyBackground();
             BeginAtlasBuild(S.tileSet);
-            ShowLoading(true);
+            if (splash == null) ShowLoading(true);
             UpdateLayoutMetrics(true);
 
             if (Array.IndexOf(args, "-autotest") >= 0) gameObject.AddComponent<AutoTest>();
@@ -440,11 +447,13 @@ namespace Mahjong.Game
                 }
             }
 
+            if (splash != null && splash.Active) splash.Tick(Atlas != null && currentName != null);
+
             // loading overlay only if it takes a visible amount of time
             bool waiting = (atlasTask != null) || (levelTask != null);
             if (loadingOverlay != null)
             {
-                bool want = waiting && (currentName == null || Time.unscaledTime - loadingSince > 0.35f);
+                bool want = waiting && (splash == null || !splash.Active) && (currentName == null || Time.unscaledTime - loadingSince > 0.35f);
                 if (want != loadingOverlay.activeSelf) loadingOverlay.SetActive(want);
             }
 
