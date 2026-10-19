@@ -238,6 +238,8 @@ namespace Mahjong.Game
                 () => S.difficultyOffset + 2, i => S.difficultyOffset = i - 2,
                 "Shifts every level up or down. Your level number stays the same.");
             Toggle("Confirm before restarting", () => S.confirmRestart, v => S.confirmRestart = v);
+            Toggle("Auto-clear the board", () => S.autoClear, v => S.autoClear = v,
+                "When no tile is blocked any more, the rest are matched off for you.");
             Toggle("Go to the next level automatically", () => S.autoContinue, v => S.autoContinue = v);
 
             Title("Your progress");

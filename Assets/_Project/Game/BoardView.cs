@@ -77,7 +77,14 @@ namespace Mahjong.Game
         float stuckCheckAt = -1f;
         float winAt = -1f;
         bool ended;
+        float autoClearAt = -1f;                     // while set, the remaining (all free) tiles are being matched off one pair at a time
+        const float AutoClearStep = 0.28f;
+        readonly List<int> scratchFree = new List<int>();
+        readonly List<long> scratchPairs = new List<long>();
         public bool InputEnabled = true;
+
+        /// <summary>True while the board is playing out the last pairs by itself.</summary>
+        public bool AutoClearing { get { return autoClearAt >= 0f; } }
 
         // camera state
         Vector2 worldMin, worldMax;                  // footprint of the tiles in board space
@@ -200,7 +207,7 @@ namespace Mahjong.Game
                                                     new Color32(14, 34, 38, 255), new Color32(6, 16, 20, 255));
             slabTr.localPosition = new Vector3(c.x, c.y, 0f);
 
-            selected = -1; combo = 0; BestCombo = 0; ended = false; stuckCheckAt = -1f; winAt = -1f;
+            selected = -1; combo = 0; BestCombo = 0; ended = false; stuckCheckAt = -1f; winAt = -1f; autoClearAt = -1f;
             zoom = 1f; pan = Vector2.zero;
             if (animateIn && !Settings.reducedMotion)
             {
@@ -212,6 +219,7 @@ namespace Mahjong.Game
                 }
             }
             RefreshFree();
+            if (!animateIn) MaybeStartAutoClear();              // a resumed board may already have nothing left blocked
             shownTilt = TargetTilt; shownRoll = TargetRoll;
             ViewTarget(out viewMin, out viewMax, out viewLayers);   // start already framing the tiles that are on the board
             ApplyCamera(true);
@@ -262,7 +270,7 @@ namespace Mahjong.Game
 
         public void TapTile(int pos)
         {
-            if (tiles == null || ended || !InputEnabled) return;
+            if (tiles == null || ended || !InputEnabled || AutoClearing) return;
             if (OnFirstInput != null) OnFirstInput();
             var b = Session.Board;
             if (pos < 0 || !tiles[pos].visible) { Deselect(); return; }
@@ -312,13 +320,44 @@ namespace Mahjong.Game
             if (Audio != null) Audio.Play("match", 0.9f, Mathf.Min(1.6f, 1f + 0.06f * (combo - 1)));
             if (OnMatched != null) OnMatched(a, c, combo);
             if (OnChanged != null) OnChanged();
-            if (Session.IsWon) { winAt = Time.unscaledTime + (reduce ? 0.2f : 0.55f); ended = true; }
-            else stuckCheckAt = Time.unscaledTime + 0.7f;
+            if (Session.IsWon) { winAt = Time.unscaledTime + (reduce ? 0.2f : 0.55f); ended = true; autoClearAt = -1f; }
+            else
+            {
+                stuckCheckAt = Time.unscaledTime + 0.7f;
+                MaybeStartAutoClear();
+            }
+        }
+
+        /// <summary>True when every tile still on the board is free, so any matching pair can simply be taken.</summary>
+        bool NothingBlocked()
+        {
+            var b = Session.Board;
+            if (b.Remaining == 0) return false;
+            for (int i = 0; i < b.Present.Length; i++) if (b.Present[i] && !b.IsFree(i)) return false;
+            return true;
+        }
+
+        void MaybeStartAutoClear()
+        {
+            if (autoClearAt >= 0f || ended || Settings == null || !Settings.autoClear || !NothingBlocked()) return;
+            Deselect();
+            autoClearAt = Time.unscaledTime + 0.45f;
+        }
+
+        void StepAutoClear()
+        {
+            autoClearAt = -1f;
+            if (ended || Session == null) return;
+            Session.Board.GetFreePairs(scratchFree, scratchPairs);
+            if (scratchPairs.Count == 0) return;                  // cannot happen with everything free, but never loop on it
+            long p = scratchPairs[0];
+            DoMatch(Board.PairA(p), Board.PairB(p));              // queues the next step itself while tiles remain and nothing is blocked
         }
 
         public bool DoUndo()
         {
             if (Session == null || ended) return false;
+            autoClearAt = -1f;                                    // stepping back takes the board off autopilot
             if (!Session.Undo()) return false;
             Deselect();
             Sync(true);
@@ -523,6 +562,7 @@ namespace Mahjong.Game
                 winAt = -1f;
                 if (OnWon != null) OnWon();
             }
+            if (autoClearAt >= 0f && Time.unscaledTime >= autoClearAt && InputEnabled) StepAutoClear();   // waits out pause and other panels
             if (stuckCheckAt > 0f && Time.unscaledTime >= stuckCheckAt && !IsBusy)
             {
                 stuckCheckAt = -1f;

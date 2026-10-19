@@ -149,7 +149,7 @@ namespace Mahjong.Game
 
             // --- auto zoom: as tiles come off, the view closes in on the ones that are left (slowly), and picking still works
             {
-                app.S.autoZoom = true; app.ApplySettings();
+                app.S.autoZoom = true; app.S.autoClear = false; app.ApplySettings();   // keep the last tiles on the board for this check
                 app.StartJourney(150, false);
                 yield return WaitGame(150);
                 yield return new WaitForSeconds(1.5f);
@@ -208,9 +208,32 @@ namespace Mahjong.Game
                 app.S.autoZoom = false; app.ApplySettings();
                 yield return new WaitForSeconds(4f);
                 Check(Mathf.Abs(app.Board.AutoZoomFactor - 1f) < 0.02f, "auto zoom off frames the whole board");
-                app.S.autoZoom = true; app.ApplySettings();
+                app.S.autoZoom = true; app.S.autoClear = true; app.ApplySettings();
                 app.Show("home");
                 yield return new WaitForSeconds(0.3f);
+
+                // --- auto clear: once nothing is blocked, the board takes the rest off by itself
+                app.StartJourney(40, false);
+                yield return WaitGame(40);
+                yield return new WaitForSeconds(1.3f);
+                {
+                    var ga = app.Get<GameScreen>();
+                    var sola = ga.Session.Level.Solution;
+                    int tapped = 0;
+                    while (tapped * 2 < sola.Length && !AllFree(ga.Session.Board))
+                    {
+                        app.Board.TapTile(sola[2 * tapped]); app.Board.TapTile(sola[2 * tapped + 1]);
+                        tapped++;
+                        yield return new WaitForSeconds(0.05f);
+                    }
+                    int left = ga.Session.Board.Remaining;
+                    yield return new WaitForSeconds(0.2f);
+                    yield return WaitUntil(() => ga.Session.IsWon, 30f, "auto clear");
+                    Check(ga.Session.IsWon && ga.Session.Pairs == sola.Length / 2,
+                          "auto clear finished the board (" + left + " tiles were left when nothing was blocked)");
+                    app.Show("home");
+                    yield return new WaitForSeconds(0.3f);
+                }
                 app.StartJourney(30, false);        // the stuck-panel check below expects the level 30 board
                 yield return WaitGame(30);
                 yield return new WaitForSeconds(1.2f);
@@ -275,6 +298,12 @@ namespace Mahjong.Game
             if (!cond()) { errors++; Log("TIMEOUT waiting for " + what); }
         }
 
+        static bool AllFree(Board b)
+        {
+            for (int i = 0; i < b.Present.Length; i++) if (b.Present[i] && !b.IsFree(i)) return false;
+            return true;
+        }
+
         IEnumerator WaitGame(int level)
         {
             yield return WaitUntil(() => app.CurrentName == "game" && app.Get<GameScreen>().Session != null &&
@@ -310,6 +339,7 @@ namespace Mahjong.Game
                 if (midShot && i == pairs / 2) yield return Shot(shotName + "_mid");
                 yield return new WaitForSeconds(0.045f);
             }
+            yield return WaitUntil(() => gs.Session.IsWon, 20f, "win");   // the board may be clearing its last free tiles itself
             yield return new WaitForSeconds(1.6f);
             Check(gs.Session.IsWon, "level " + gs.Session.Level.Index + " solved by tapping the solution");
             yield return Shot(shotName + "_win");

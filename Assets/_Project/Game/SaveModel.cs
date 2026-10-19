@@ -26,6 +26,7 @@ namespace Mahjong.Game
         public bool matchAssist;
         public bool confirmRestart = true;
         public bool autoContinue;
+        public bool autoClear = true;     // once no tile is blocked any more, take the rest off automatically
         public int difficultyOffset;      // -2 .. +2
         public string tileSet = "classic";
         public string background = "random";
