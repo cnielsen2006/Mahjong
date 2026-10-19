@@ -240,6 +240,9 @@ namespace Mahjong.Game
             Toggle("Confirm before restarting", () => S.confirmRestart, v => S.confirmRestart = v);
             Toggle("Auto-clear the board", () => S.autoClear, v => S.autoClear = v,
                 "When no tile is blocked any more, the rest are matched off for you.");
+            Cycle("Player level", new[] { "Beginner", "Intermediate", "Expert" },
+                () => S.playerLevel, i => S.playerLevel = i,
+                "Sets how long you have between matches to keep a combo going: 4 seconds, 3 seconds or 2.25 seconds.");
             Toggle("Combo timer bar", () => S.showComboTimer, v => S.showComboTimer = v,
                 "Shows a bar counting down the time left to keep a combo going. Turn off for a calmer game; combos still count.");
             Toggle("Go to the next level automatically", () => S.autoContinue, v => S.autoContinue = v);

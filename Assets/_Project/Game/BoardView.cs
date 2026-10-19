@@ -74,7 +74,9 @@ namespace Mahjong.Game
         float lastMatchTime = -10f;
         int combo;
         public int BestCombo { get; private set; }
-        public const float ComboWindow = 3f;         // seconds allowed between matches to keep a combo alive
+        static readonly float[] ComboWindows = { 4f, 3f, 2.25f };   // seconds allowed between matches, by player level
+        /// <summary>Seconds allowed between matches to keep a combo alive; beginners get longer.</summary>
+        public float ComboWindow { get { return ComboWindows[Settings == null ? 1 : Mathf.Clamp(Settings.playerLevel, 0, ComboWindows.Length - 1)]; } }
 
         /// <summary>Chain length so far (0 when no chain is alive).</summary>
         public int Combo { get { return ComboLeft01 > 0f ? combo : 0; } }

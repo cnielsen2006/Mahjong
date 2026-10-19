@@ -26,6 +26,7 @@ namespace Mahjong.Game
         public bool matchAssist;
         public bool confirmRestart = true;
         public bool autoContinue;
+        public int playerLevel = 1;       // 0 beginner, 1 intermediate, 2 expert: sets how long a combo stays alive
         public bool showComboTimer = true; // side bar counting down the time left to keep a combo alive
         public bool autoClear = true;    // once no tile is blocked any more, take the rest off automatically
         public int difficultyOffset;      // -2 .. +2
