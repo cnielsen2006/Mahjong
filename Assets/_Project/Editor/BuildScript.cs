@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEditor.Build;
@@ -99,6 +100,43 @@ namespace Mahjong.EditorTools
             }
             var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
             if (icon != null) PlayerSettings.SetIcons(NamedBuildTarget.Unknown, new[] { icon }, IconKind.Any);
+            MakeAndroidIcons();
+        }
+
+        /// <summary>Android launchers need their own icon slots: an adaptive icon made of a background and a foreground layer.</summary>
+        static void MakeAndroidIcons()
+        {
+            const string bgPath = "Assets/Icons/android_bg.png", fgPath = "Assets/Icons/android_fg.png";
+            if (!File.Exists(bgPath) || !File.Exists(fgPath))
+            {
+                const int S = 512;
+                var bg = new Raster(S, S);
+                for (int y = 0; y < S; y++)
+                    for (int x = 0; x < S; x++)
+                    {
+                        float f = y / (float)(S - 1);
+                        bg.Px[y * S + x] = new Color32((byte)Mathf.Lerp(22, 48, f), (byte)Mathf.Lerp(78, 134, f), (byte)Mathf.Lerp(62, 104, f), 255);
+                    }
+                // the launcher masks the outer third of an adaptive icon, so the tile stays inside the middle 66%
+                var fg = new Raster(S, S);
+                var tile = TileArt.DrawTile(31, Content.TileSets[0]);
+                float sc = 0.56f * S / tile.H;
+                fg.BlitScaled(tile, (S - tile.W * sc) * 0.5f, (S - tile.H * sc) * 0.5f, sc);
+                foreach (var pair in new[] { new KeyValuePair<string, Raster>(bgPath, bg), new KeyValuePair<string, Raster>(fgPath, fg) })
+                {
+                    var tex = pair.Value.ToTexture(false, FilterMode.Bilinear);
+                    File.WriteAllBytes(pair.Key, tex.EncodeToPNG());
+                    UnityEngine.Object.DestroyImmediate(tex);
+                    AssetDatabase.ImportAsset(pair.Key);
+                }
+            }
+            var bgTex = AssetDatabase.LoadAssetAtPath<Texture2D>(bgPath);
+            var fgTex = AssetDatabase.LoadAssetAtPath<Texture2D>(fgPath);
+            var android = NamedBuildTarget.Android;
+
+            var adaptive = PlayerSettings.GetPlatformIcons(android, UnityEditor.Android.AndroidPlatformIconKind.Adaptive);
+            foreach (var p in adaptive) { p.SetTexture(bgTex, 0); p.SetTexture(fgTex, 1); }
+            PlayerSettings.SetPlatformIcons(android, UnityEditor.Android.AndroidPlatformIconKind.Adaptive, adaptive);
         }
 
         public static void BuildWindows()
