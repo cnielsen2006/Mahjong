@@ -502,7 +502,8 @@ namespace Mahjong.Game
                 if (combo >= 20) { word = "Legendary! x"; col = new Color(0.55f, 0.85f, 1f); comboPop = 0.45f; hold = 1.6f; }
                 else if (combo >= 15) { word = "Incredible! x"; col = new Color(1f, 0.5f, 0.7f); comboPop = 0.40f; hold = 1.5f; }
                 else if (combo >= 10) { word = "Blazing! x"; col = new Color(1f, 0.6f, 0.25f); comboPop = 0.35f; hold = 1.4f; }
-                else if (combo >= 5) { word = "Combo x"; col = UiKit.Gold; comboPop = 0.25f; hold = 1.2f; }
+                else if (combo >= 8) { word = "Great! x"; col = new Color(0.4f, 0.92f, 0.8f); comboPop = 0.30f; hold = 1.3f; }
+                else if (combo >= 5) { word = "Nice! x"; col = new Color(0.6f, 0.95f, 0.45f); comboPop = 0.25f; hold = 1.2f; }
                 else { word = "Combo x"; col = UiKit.Gold; comboPop = 0.15f; hold = 1.1f; }
                 comboLbl.text = word + combo;
                 comboLbl.color = col;
