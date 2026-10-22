@@ -155,6 +155,12 @@ namespace Mahjong.EditorTools
         public static void BuildWebGL()
         {
             Configure();
+            // runs from any static host: Gzip with the JS fallback needs no special server headers
+            PlayerSettings.WebGL.template = "PROJECT:Mahjong";
+            PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Gzip;
+            PlayerSettings.WebGL.decompressionFallback = true;
+            PlayerSettings.WebGL.dataCaching = false;       // the template's service worker caches the files instead
+            PlayerSettings.WebGL.exceptionSupport = WebGLExceptionSupport.ExplicitlyThrownExceptionsOnly;
             Build(BuildTarget.WebGL, "Builds/WebGL");
         }
 

@@ -24,6 +24,28 @@
             "cwd": "${workspaceFolder}"
         },
         {
+            "name": "Mahjong web: serve on LAN",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "python tools\\serve_webgl.py 8765",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Mahjong web: build, then serve on LAN",
+            "type": "node-terminal",
+            "request": "launch",
+            "preLaunchTask": "Build WebGL player",
+            "command": "python tools\\serve_webgl.py 8765",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Mahjong web: serve on LAN and open here",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "Start-Job { Start-Sleep 1; Start-Process 'http://localhost:8765/' } | Out-Null; python tools\\serve_webgl.py 8765",
+            "cwd": "${workspaceFolder}"
+        },
+        {
             "name": "Mahjong: in-engine autotest",
             "type": "node-terminal",
             "request": "launch",

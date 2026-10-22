@@ -42,7 +42,7 @@ namespace Mahjong.Game
             Make("win", Chime(new[] { 523.25f, 659.25f, 783.99f, 1046.5f, 1318.5f }, 0.13f, 0.6f));
             Make("page", Tone(0.06f, 0.002f, 55f, 440f, 0f, 0.25f));
 
-            musicTask = Task.Run(() => MakeMusic(0));
+            musicTask = Bg.Run(() => MakeMusic(0));
         }
 
         void Make(string name, float[] data)

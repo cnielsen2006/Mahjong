@@ -297,7 +297,7 @@ namespace Mahjong.Game
         {
             var style = Content.TileSet(id);
             atlasTaskId = style.Id;
-            atlasTask = Task.Run(() => TileAtlas.Draw(style));
+            atlasTask = Bg.Run(() => TileAtlas.Draw(style));
         }
 
         public void SetTileSet(string id)
@@ -395,18 +395,19 @@ namespace Mahjong.Game
             int offset = S.difficultyOffset;
             string key = r.Mode == "journey" ? Key("j", r.Level, offset) : null;
             if (key != null && prefetch.ContainsKey(key)) { levelTask = prefetch[key]; prefetch.Remove(key); }
-            else levelTask = Task.Run(() => MakeLevel(r, offset));
+            else levelTask = Bg.Run(() => MakeLevel(r, offset));
             loadingSince = Time.unscaledTime;
         }
 
         public void Prefetch(int level)
         {
+            if (!Bg.Threaded) return;                  // without threads a prefetch would stall the frame mid-game
             int offset = S.difficultyOffset;
             string key = Key("j", level, offset);
             if (prefetch.ContainsKey(key)) return;
             if (prefetch.Count > 3) prefetch.Clear();
             var r = new LevelRequest { Mode = "journey", Level = level };
-            prefetch[key] = Task.Run(() => MakeLevel(r, offset));
+            prefetch[key] = Bg.Run(() => MakeLevel(r, offset));
         }
 
         // ------------------------------------------------------------------ frame
@@ -414,6 +415,7 @@ namespace Mahjong.Game
         void Update()
         {
             UpdateLayoutMetrics(false);
+            Bg.Pump();
 
             // atlas build finished?
             if (atlasTask != null && atlasTask.IsCompleted)

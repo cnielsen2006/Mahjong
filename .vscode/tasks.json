@@ -10,6 +10,14 @@
             "problemMatcher": []
         },
         {
+            "label": "Build WebGL player",
+            "type": "shell",
+            "command": "powershell -NoProfile -File tools\\build_webgl.ps1",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
             "label": "Build and run autotest",
             "type": "shell",
             "command": "powershell -NoProfile -File tools\\build_and_test.ps1",
